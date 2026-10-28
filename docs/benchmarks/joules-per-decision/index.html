@@ -1,0 +1,722 @@
+<!DOCTYPE html><html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-bguv2lll"> <head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Joules per Fill, Joules per Decision | NEOMORPHIC™ Docs</title><link rel="canonical" href="https://neomorphic.si/docs/benchmarks/joules-per-decision/"/><link rel="sitemap" href="/sitemap-index.xml"/><link rel="shortcut icon" href="/favicon.svg" type="image/svg+xml"/><meta name="generator" content="Astro v5.18.2"/><meta name="generator" content="Starlight v0.36.3"/><meta property="og:title" content="Joules per Fill, Joules per Decision"/><meta property="og:type" content="article"/><meta property="og:url" content="https://neomorphic.si/docs/benchmarks/joules-per-decision/"/><meta property="og:locale" content="en"/><meta property="og:description" content="An energy accounting of exact address-catalog compression: what a byte saved is worth in joules, where the decoder eats it, and what a joule is worth to an AI system."/><meta property="og:site_name" content="NEOMORPHIC™ Docs"/><meta name="twitter:card" content="summary_large_image"/><meta name="description" content="An energy accounting of exact address-catalog compression: what a byte saved is worth in joules, where the decoder eats it, and what a joule is worth to an AI system."/><style>
+	html:not([data-neo-unlocked='true']) body {
+		overflow: hidden !important;
+		background: #0c0b14 !important;
+	}
+	html:not([data-neo-unlocked='true']) body > *:not(#neo-auth-gate) {
+		display: none !important;
+		visibility: hidden !important;
+		pointer-events: none !important;
+	}
+	#neo-auth-gate {
+		position: fixed;
+		inset: 0;
+		z-index: 999999;
+		display: grid;
+		place-items: center;
+		padding: 1.5rem;
+		background:
+			radial-gradient(60% 50% at 20% 20%, rgba(168, 216, 248, 0.14), transparent 70%),
+			radial-gradient(50% 45% at 80% 30%, rgba(201, 184, 246, 0.16), transparent 70%),
+			linear-gradient(160deg, #15131f 0%, #0c0b14 60%, #121025 100%);
+		color: #eceaf5;
+		font-family: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, sans-serif;
+	}
+	html[data-neo-unlocked='true'] #neo-auth-gate {
+		display: none !important;
+	}
+	.neo-gate__card {
+		width: min(100%, 440px);
+		padding: 2.5rem 2.25rem 2rem;
+		border-radius: 20px;
+		background: rgba(21, 19, 31, 0.82);
+		border: 1px solid rgba(201, 184, 246, 0.22);
+		box-shadow:
+			0 0 0 1px rgba(168, 216, 248, 0.08) inset,
+			0 30px 80px -24px rgba(0, 0, 0, 0.75);
+		backdrop-filter: blur(20px);
+		-webkit-backdrop-filter: blur(20px);
+		display: flex;
+		flex-direction: column;
+		gap: 1.1rem;
+	}
+	.neo-gate__eyebrow {
+		font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+		font-size: 0.7rem;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		color: #a8d8f8;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.neo-gate__dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: #9ef0d8;
+		box-shadow: 0 0 10px #9ef0d8;
+	}
+	.neo-gate__title {
+		font-family: 'Space Grotesk Variable', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+		font-size: 1.55rem;
+		font-weight: 600;
+		letter-spacing: -0.02em;
+		line-height: 1.2;
+		color: #ffffff;
+		margin: 0;
+	}
+	.neo-gate__desc {
+		font-size: 0.9rem;
+		line-height: 1.55;
+		color: #a29fb8;
+		margin: 0;
+	}
+	.neo-gate__form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+		margin-top: 0.25rem;
+	}
+	.neo-gate__input-wrap {
+		position: relative;
+		display: flex;
+		align-items: center;
+	}
+	.neo-gate__input {
+		width: 100%;
+		height: 48px;
+		padding: 0 1rem;
+		border-radius: 12px;
+		border: 1px solid rgba(201, 184, 246, 0.25);
+		background: rgba(12, 11, 20, 0.85);
+		color: #ffffff;
+		font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+		font-size: 0.95rem;
+		letter-spacing: 0.04em;
+		outline: none;
+		transition: border-color 0.2s ease, box-shadow 0.2s ease;
+	}
+	.neo-gate__input:focus {
+		border-color: #a8d8f8;
+		box-shadow: 0 0 0 3px rgba(168, 216, 248, 0.18);
+	}
+	.neo-gate__btn {
+		height: 48px;
+		border-radius: 999px;
+		border: 1px solid rgba(201, 184, 246, 0.35);
+		background: linear-gradient(135deg, #c9b8f6 0%, #a8d8f8 100%);
+		color: #0c0b14;
+		font-family: 'Space Grotesk Variable', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+		font-size: 0.95rem;
+		font-weight: 600;
+		cursor: pointer;
+		transition: transform 0.15s ease, box-shadow 0.2s ease;
+	}
+	.neo-gate__btn:hover {
+		box-shadow: 0 0 28px rgba(168, 216, 248, 0.45);
+		transform: translateY(-1px);
+	}
+	.neo-gate__error {
+		font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+		font-size: 0.78rem;
+		color: #ff7b93;
+		min-height: 1.15em;
+		margin: 0;
+	}
+	.neo-gate__footer {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding-top: 0.75rem;
+		border-top: 1px solid rgba(201, 184, 246, 0.12);
+		font-size: 0.8rem;
+		color: #a29fb8;
+	}
+	.neo-gate__back {
+		color: #c9b8f6;
+		text-decoration: none;
+		font-weight: 500;
+	}
+	.neo-gate__back:hover {
+		color: #a8d8f8;
+	}
+</style><script>
+	window.StarlightThemeProvider = (() => {
+		const hasStorage = typeof localStorage !== 'undefined';
+		if (hasStorage && localStorage.getItem('starlight-theme') === null) {
+			try { localStorage.setItem('starlight-theme', 'light'); } catch {}
+		}
+		const storedTheme = hasStorage && localStorage.getItem('starlight-theme');
+		let theme = storedTheme || 'auto';
+		if (theme === 'auto') {
+			theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+		}
+		document.documentElement.dataset.theme = theme === 'dark' ? 'dark' : 'light';
+		return {
+			updatePickers(theme = storedTheme || 'auto') {
+				document.querySelectorAll('starlight-theme-select').forEach((picker) => {
+					const select = picker.querySelector('select');
+					if (select) select.value = theme;
+					/** @type {HTMLTemplateElement | null} */
+					const tmpl = document.querySelector(`#theme-icons`);
+					const newIcon = tmpl && tmpl.content.querySelector('.' + theme);
+					if (newIcon) {
+						const oldIcon = picker.querySelector('svg.label-icon');
+						if (oldIcon) {
+							oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes);
+						}
+					}
+				});
+			},
+		};
+	})();
+
+	// Sovereign Documentation Access Gate (Salted SHA-256 verification)
+	(() => {
+		const STORAGE_KEY = 'neo_docs_auth_v1';
+		const EXPECTED_HASH = 'da43f9f15396ade683ccd8011b271bbaae599b9554c48418d58601c2eca2403f';
+		const SALT = ':neomorphic-ssii-2026';
+
+		try {
+			if (sessionStorage.getItem(STORAGE_KEY) === EXPECTED_HASH) {
+				document.documentElement.setAttribute('data-neo-unlocked', 'true');
+				return;
+			}
+		} catch {}
+
+		async function sha256Hex(str) {
+			const buf = new TextEncoder().encode(str);
+			const digest = await crypto.subtle.digest('SHA-256', buf);
+			return Array.from(new Uint8Array(digest))
+				.map((b) => b.toString(16).padStart(2, '0'))
+				.join('');
+		}
+
+		function mountGate() {
+			if (document.getElementById('neo-auth-gate')) return;
+			const gate = document.createElement('div');
+			gate.id = 'neo-auth-gate';
+			gate.setAttribute('role', 'dialog');
+			gate.setAttribute('aria-modal', 'true');
+			gate.setAttribute('aria-labelledby', 'neo-gate-title');
+			gate.innerHTML = `
+				<div class="neo-gate__card">
+					<div class="neo-gate__eyebrow">
+						<span class="neo-gate__dot" aria-hidden="true"></span>
+						<span>NEOMORPHIC™ · PROTECTED DOCUMENTATION</span>
+					</div>
+					<h1 class="neo-gate__title" id="neo-gate-title">Enter Access Password</h1>
+					<p class="neo-gate__desc">
+						Technical architecture, verified benchmarks, and sovereign briefing materials require authorized access.
+					</p>
+					<form class="neo-gate__form" id="neo-gate-form" autocomplete="off">
+						<div class="neo-gate__input-wrap">
+							<input
+								type="password"
+								id="neo-gate-input"
+								class="neo-gate__input"
+								placeholder="Password"
+								required
+								autofocus
+								aria-label="Documentation password"
+							/>
+						</div>
+						<button type="submit" class="neo-gate__btn">Unlock Documentation</button>
+						<p class="neo-gate__error" id="neo-gate-error" role="alert" aria-live="polite"></p>
+					</form>
+					<div class="neo-gate__footer">
+						<span>SSII Architecture</span>
+						<a href="/" class="neo-gate__back">← Return to neomorphic.si</a>
+					</div>
+				</div>
+			`;
+			document.body.prepend(gate);
+
+			const form = document.getElementById('neo-gate-form');
+			const input = document.getElementById('neo-gate-input');
+			const errorEl = document.getElementById('neo-gate-error');
+			setTimeout(() => input && input.focus(), 50);
+
+			form.addEventListener('submit', async (e) => {
+				e.preventDefault();
+				const raw = (input.value || '').trim().toLowerCase();
+				if (!raw) return;
+				const hash = await sha256Hex(raw + SALT);
+				if (hash === EXPECTED_HASH) {
+					try { sessionStorage.setItem(STORAGE_KEY, EXPECTED_HASH); } catch {}
+					document.documentElement.setAttribute('data-neo-unlocked', 'true');
+					gate.remove();
+				} else {
+					errorEl.textContent = 'Invalid access password. Please try again.';
+					input.value = '';
+					input.focus();
+				}
+			});
+		}
+
+		if (document.body) {
+			mountGate();
+		} else {
+			document.addEventListener('DOMContentLoaded', mountGate);
+		}
+	})();
+</script><template id="theme-icons"><svg aria-hidden="true" class="light astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/_astro/print.DNXP8c50.css" media="print"><style>:root{--bg-lavender: #f1eef8;--bg-mist: #e7e2f3;--bg-veil: rgba(255, 255, 255, .55);--ink: #0c0b14;--ink-2: #15131f;--ink-3: #1e1b2c;--white: #ffffff;--pastel-blue: #a8d8f8;--pastel-purple: #c9b8f6;--periwinkle: #8e9cff;--signal-mint: #9ef0d8;--mint: #9ef0d8;--text: #16141f;--text-muted: #5b566e;--text-on-ink: #eceaf5;--text-on-ink-muted: #a29fb8;--line: rgba(22, 20, 31, .1);--line-on-ink: rgba(201, 184, 246, .18);--glow-blue: 0 0 24px rgba(168, 216, 248, .45);--glow-purple: 0 0 24px rgba(201, 184, 246, .45);--aurora: radial-gradient(60% 50% at 20% 20%, rgba(168, 216, 248, .55), transparent 70%), radial-gradient(50% 45% at 80% 30%, rgba(201, 184, 246, .6), transparent 70%), radial-gradient(60% 60% at 50% 100%, rgba(142, 156, 255, .25), transparent 70%);--ink-panel: linear-gradient(160deg, #15131f 0%, #0c0b14 60%, #121025 100%);--font-display: "Space Grotesk Variable", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;--font-body: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif;--font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;--fs-xs: clamp(.75rem, .72rem + .1vw, .8rem);--fs-sm: clamp(.875rem, .85rem + .1vw, .95rem);--fs-md: clamp(1rem, .97rem + .15vw, 1.1rem);--fs-lg: clamp(1.25rem, 1.1rem + .6vw, 1.6rem);--fs-xl: clamp(1.75rem, 1.4rem + 1.5vw, 2.75rem);--fs-2xl: clamp(2.5rem, 1.8rem + 3vw, 4.75rem);--space-1: .25rem;--space-2: .5rem;--space-3: 1rem;--space-4: 1.5rem;--space-5: 2.5rem;--space-6: 4rem;--space-7: 6rem;--space-8: 9rem;--radius-sm: 8px;--radius-md: 14px;--radius-lg: 24px;--container: 1240px;--ease-out: cubic-bezier(.16, 1, .3, 1);--nav-h: 64px;--nav-top: 14px;--grid-line: rgba(22, 20, 31, .055);--grid-line-on-ink: rgba(201, 184, 246, .07);--grid-size: 48px;--tick-color: rgba(22, 20, 31, .38);--tick-color-on-ink: rgba(201, 184, 246, .55);--text-accent: #5a4fcf;--shadow-soft: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 20px 50px -24px rgba(44, 36, 112, .25);--shadow-ink: 0 30px 80px -30px rgba(12, 11, 20, .6)}
+</style>
+<link rel="stylesheet" href="/_astro/index.B0URtb6e.css">
+<style>@layer starlight.components{:root{--sl-badge-default-border: var(--sl-color-accent);--sl-badge-default-bg: var(--sl-color-accent-low);--sl-badge-default-text: #fff;--sl-badge-note-border: var(--sl-color-blue);--sl-badge-note-bg: var(--sl-color-blue-low);--sl-badge-note-text: #fff;--sl-badge-danger-border: var(--sl-color-red);--sl-badge-danger-bg: var(--sl-color-red-low);--sl-badge-danger-text: #fff;--sl-badge-success-border: var(--sl-color-green);--sl-badge-success-bg: var(--sl-color-green-low);--sl-badge-success-text: #fff;--sl-badge-caution-border: var(--sl-color-orange);--sl-badge-caution-bg: var(--sl-color-orange-low);--sl-badge-caution-text: #fff;--sl-badge-tip-border: var(--sl-color-purple);--sl-badge-tip-bg: var(--sl-color-purple-low);--sl-badge-tip-text: #fff}[data-theme=light]:root{--sl-badge-default-bg: var(--sl-color-accent-high);--sl-badge-note-bg: var(--sl-color-blue-high);--sl-badge-danger-bg: var(--sl-color-red-high);--sl-badge-success-bg: var(--sl-color-green-high);--sl-badge-caution-bg: var(--sl-color-orange-high);--sl-badge-tip-bg: var(--sl-color-purple-high)}.sl-badge:where(.astro-avdet4wd){display:inline-block;border:1px solid var(--sl-color-border-badge);border-radius:.25rem;font-family:var(--sl-font-system-mono);line-height:normal;color:var(--sl-color-text-badge);background-color:var(--sl-color-bg-badge);overflow-wrap:anywhere}.sidebar-content .sl-badge:where(.astro-avdet4wd){line-height:1;font-size:var(--sl-text-xs);padding:.125rem .375rem}.sidebar-content a[aria-current=page]>.sl-badge:where(.astro-avdet4wd){--sl-color-bg-badge: transparent;--sl-color-border-badge: currentColor;color:inherit}.default:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-default-bg);--sl-color-border-badge: var(--sl-badge-default-border);--sl-color-text-badge: var(--sl-badge-default-text)}.note:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-note-bg);--sl-color-border-badge: var(--sl-badge-note-border);--sl-color-text-badge: var(--sl-badge-note-text)}.danger:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-danger-bg);--sl-color-border-badge: var(--sl-badge-danger-border);--sl-color-text-badge: var(--sl-badge-danger-text)}.success:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-success-bg);--sl-color-border-badge: var(--sl-badge-success-border);--sl-color-text-badge: var(--sl-badge-success-text)}.tip:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-tip-bg);--sl-color-border-badge: var(--sl-badge-tip-border);--sl-color-text-badge: var(--sl-badge-tip-text)}.caution:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-caution-bg);--sl-color-border-badge: var(--sl-badge-caution-border);--sl-color-text-badge: var(--sl-badge-caution-text)}.small:where(.astro-avdet4wd){font-size:var(--sl-text-xs);padding:.125rem .25rem}.medium:where(.astro-avdet4wd){font-size:var(--sl-text-sm);padding:.175rem .35rem}.large:where(.astro-avdet4wd){font-size:var(--sl-text-base);padding:.225rem .45rem}.sl-markdown-content :is(h1,h2,h3,h4,h5,h6) .sl-badge:where(.astro-avdet4wd){vertical-align:middle}}
+@layer starlight.components{.card-grid:where(.astro-zntqmydn){display:grid;grid-template-columns:100%;gap:1rem}.card-grid:where(.astro-zntqmydn)>*{margin-top:0!important}@media(min-width:50rem){.card-grid:where(.astro-zntqmydn){grid-template-columns:1fr 1fr;gap:1.5rem}.stagger:where(.astro-zntqmydn){--stagger-height: 5rem;padding-bottom:var(--stagger-height)}.stagger:where(.astro-zntqmydn)>*:nth-child(2n){transform:translateY(var(--stagger-height))}}}
+@layer starlight.components{svg:where(.astro-c6vsoqas){color:var(--sl-icon-color);font-size:var(--sl-icon-size, 1em);width:1em;height:1em}}
+@layer starlight.components{.sl-link-card:where(.astro-mf7fz2mj){display:grid;grid-template-columns:1fr auto;gap:.5rem;border:1px solid var(--sl-color-gray-5);border-radius:.5rem;padding:1rem;box-shadow:var(--sl-shadow-sm);position:relative}a:where(.astro-mf7fz2mj){text-decoration:none;line-height:var(--sl-line-height-headings)}a:where(.astro-mf7fz2mj):before{content:"";position:absolute;inset:0}.stack:where(.astro-mf7fz2mj){flex-direction:column;gap:.5rem}.title:where(.astro-mf7fz2mj){color:var(--sl-color-white);font-weight:600;font-size:var(--sl-text-lg)}.description:where(.astro-mf7fz2mj){color:var(--sl-color-gray-3);line-height:1.5}.icon:where(.astro-mf7fz2mj){color:var(--sl-color-gray-3)}.sl-link-card:where(.astro-mf7fz2mj):hover{background:var(--sl-color-gray-7, var(--sl-color-gray-6));border-color:var(--sl-color-gray-2)}.sl-link-card:where(.astro-mf7fz2mj):hover .icon:where(.astro-mf7fz2mj){color:var(--sl-color-white)}}
+@layer starlight.components{.sl-steps{--bullet-size: calc(var(--sl-line-height) * 1rem);--bullet-margin: .375rem;list-style:none;counter-reset:steps-counter var(--sl-steps-start, 0);padding-inline-start:0}.sl-steps>li{counter-increment:steps-counter;position:relative;padding-inline-start:calc(var(--bullet-size) + 1rem);padding-bottom:1px;min-height:calc(var(--bullet-size) + var(--bullet-margin))}.sl-steps>li+li{margin-top:0}.sl-steps>li:before{content:counter(steps-counter);position:absolute;top:0;inset-inline-start:0;width:var(--bullet-size);height:var(--bullet-size);line-height:var(--bullet-size);font-size:var(--sl-text-xs);font-weight:600;text-align:center;color:var(--sl-color-white);background-color:var(--sl-color-gray-6);border-radius:99rem;box-shadow:inset 0 0 0 1px var(--sl-color-gray-5)}.sl-steps>li:after{--guide-width: 1px;content:"";position:absolute;top:calc(var(--bullet-size) + var(--bullet-margin));bottom:var(--bullet-margin);inset-inline-start:calc((var(--bullet-size) - var(--guide-width)) / 2);width:var(--guide-width);background-color:var(--sl-color-hairline-light)}}@layer starlight.content{.sl-steps>li>:first-child{--lh: calc(1em * var(--sl-line-height));--shift-y: calc(.5 * (var(--bullet-size) - var(--lh)));transform:translateY(var(--shift-y));margin-bottom:var(--shift-y)}.sl-steps>li>:first-child:where(h1,h2,h3,h4,h5,h6){--lh: calc(1em * var(--sl-line-height-headings))}@supports (--prop: 1lh){.sl-steps>li>:first-child{--lh: 1lh}}}
+@layer starlight.components{.sl-link-button:where(.astro-xwgiixxa){align-items:center;border:1px solid transparent;border-radius:999rem;display:inline-flex;font-size:var(--sl-text-sm);gap:.5em;line-height:1.1875;outline-offset:.25rem;padding:.4375rem 1.125rem;text-decoration:none}.sl-link-button:where(.astro-xwgiixxa).primary{background:var(--sl-color-text-accent);border-color:var(--sl-color-text-accent);color:var(--sl-color-black)}.sl-link-button:where(.astro-xwgiixxa).primary:hover{color:var(--sl-color-black)}.sl-link-button:where(.astro-xwgiixxa).secondary{border-color:inherit;color:var(--sl-color-white)}.sl-link-button:where(.astro-xwgiixxa).minimal{color:var(--sl-color-white);padding-inline:0}.sl-link-button:where(.astro-xwgiixxa) svg{flex-shrink:0}@media(min-width:50rem){.sl-link-button:where(.astro-xwgiixxa){font-size:var(--sl-text-base);padding:.9375rem 1.25rem}}.sl-markdown-content .sl-link-button:where(.astro-xwgiixxa){margin-inline-end:1rem}.sl-markdown-content .sl-link-button:where(.astro-xwgiixxa):not(:where(p *)){margin-block:1rem}}
+</style><script type="module" src="/_astro/page.B1D-nYk3.js"></script><style>.nm-joules-cards:where(.astro-atwgfand){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.25rem;margin:2rem 0}.nm-jcard:where(.astro-atwgfand){display:grid;grid-template-rows:auto 1fr;padding:.7rem;border-radius:var(--radius-lg);background:var(--nm-surface);border:1px solid var(--nm-surface-line);box-shadow:var(--nm-shadow)}.nm-jcard__screen:where(.astro-atwgfand){position:relative;aspect-ratio:480 / 236;border-radius:calc(var(--radius-lg) - 8px);background:linear-gradient(to right,rgba(201,184,246,.06) 1px,transparent 1px) 0 0 / 20px 20px,linear-gradient(to bottom,rgba(201,184,246,.06) 1px,transparent 1px) 0 0 / 20px 20px,radial-gradient(75% 80% at 75% 20%,rgba(168,216,248,.16),transparent 70%),var(--ink-panel);border:1px solid var(--line-on-ink);overflow:hidden}.nm-jcard__screen:where(.astro-atwgfand) svg:where(.astro-atwgfand){width:100%;height:100%;display:block}.nm-jcard__k:where(.astro-atwgfand){position:absolute;top:.65rem;left:.85rem;font-family:var(--sl-font-mono);font-size:.6rem;letter-spacing:.13em;color:#b8b5cc}.nm-jcard__badge:where(.astro-atwgfand){position:absolute;top:.6rem;right:.8rem;font-family:var(--sl-font-mono);font-size:.58rem;letter-spacing:.11em;color:#9ef0d8;padding:.12rem .48rem;border-radius:999px;background:#0c0b14bf;border:1px solid rgba(158,240,216,.35)}.j-pulse-node:where(.astro-atwgfand){filter:drop-shadow(0 0 6px #9ef0d8)}.j-svg-lbl:where(.astro-atwgfand){font-family:var(--sl-font-mono);font-size:7.5px;letter-spacing:.08em;fill:#eceaf5}.j-svg-val:where(.astro-atwgfand){font-family:var(--sl-font-mono);font-size:8.5px;font-weight:600;fill:#fff}.j-svg-val--mint:where(.astro-atwgfand){fill:#9ef0d8}.j-svg-val--blue:where(.astro-atwgfand){fill:#a8d8f8}.j-box:where(.astro-atwgfand){fill:#121020db;stroke:#c9b8f647;stroke-width:1}.j-box--mint:where(.astro-atwgfand){stroke:#9ef0d86b}.j-stage-k:where(.astro-atwgfand){font-family:var(--sl-font-mono);font-size:6.5px;letter-spacing:.12em;fill:#b8b5cc}.j-stage-v:where(.astro-atwgfand){font-family:var(--sl-font-mono);font-size:9px;font-weight:700;fill:#fff}.j-svg-k:where(.astro-atwgfand){font-family:var(--sl-font-mono);font-size:7px;letter-spacing:.12em;fill:#b8b5cc}.j-svg-med:where(.astro-atwgfand){font-family:var(--sl-font-mono);font-size:13px;font-weight:700;fill:#fff}.j-svg-sub:where(.astro-atwgfand){font-family:var(--sl-font);font-size:7.5px;fill:#d6d2ea}.nm-jcard__body:where(.astro-atwgfand){padding:1.15rem 1rem 1rem;display:flex;flex-direction:column;gap:.55rem}.nm-jcard__title:where(.astro-atwgfand){font-family:var(--nm-font-display);font-size:1.15rem;line-height:1.25;color:var(--sl-color-white);margin:0}.nm-jcard__oneliner:where(.astro-atwgfand){margin:0;font-size:.9rem;font-weight:600;color:var(--sl-color-accent);line-height:1.45}.nm-jcard__list:where(.astro-atwgfand){margin:.15rem 0 0;padding-left:1.15rem;display:grid;gap:.4rem;font-size:.86rem;line-height:1.55;color:var(--sl-color-gray-2)}@media(max-width:860px){.nm-joules-cards:where(.astro-atwgfand){grid-template-columns:1fr}}
+</style></head> <body class="astro-bguv2lll"> <a href="#_top" class="astro-7q3lir66">Skip to content</a>  <div class="page sl-flex astro-vrdttmbt"> <header class="header astro-vrdttmbt"><div class="header astro-kmkmnagf"> <div class="title-wrapper sl-flex astro-kmkmnagf"> <a href="/" class="site-title sl-flex astro-m46x6ez3">  <span class="astro-m46x6ez3" translate="no"> NEOMORPHIC™ Docs </span> </a>  </div> <div class="sl-flex print:hidden astro-kmkmnagf"> <site-search class="astro-kmkmnagf astro-v37mnknz" data-translations="{&#34;placeholder&#34;:&#34;Search&#34;}"> <button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-v37mnknz"> <svg aria-hidden="true" class="astro-v37mnknz astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg> <span class="sl-hidden md:sl-block astro-v37mnknz" aria-hidden="true">Search</span> <kbd class="sl-hidden md:sl-flex astro-v37mnknz" style="display: none;"> <kbd class="astro-v37mnknz">Ctrl</kbd><kbd class="astro-v37mnknz">K</kbd> </kbd> </button> <dialog style="padding:0" aria-label="Search" class="astro-v37mnknz"> <div class="dialog-frame sl-flex astro-v37mnknz">  <button data-close-modal class="sl-flex md:sl-hidden astro-v37mnknz"> Cancel </button> <div class="search-container astro-v37mnknz"> <div id="starlight__search" class="astro-v37mnknz"></div> </div> </div> </dialog> </site-search>  <script>
+	(() => {
+		const openBtn = document.querySelector('button[data-open-modal]');
+		const shortcut = openBtn?.querySelector('kbd');
+		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
+		const platformKey = shortcut.querySelector('kbd');
+		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
+			platformKey.textContent = '⌘';
+			openBtn.setAttribute('aria-keyshortcuts', 'Meta+K');
+		}
+		shortcut.style.display = '';
+	})();
+</script> <script type="module" src="/_astro/Search.astro_astro_type_script_index_0_lang.CJiOmi4V.js"></script>   </div> <div class="sl-hidden md:sl-flex print:hidden right-group astro-kmkmnagf"> <div class="sl-flex social-icons astro-kmkmnagf">  </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-4yphtoen"> <span class="sr-only astro-4yphtoen">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select autocomplete="off" class="astro-4yphtoen"> <option value="dark" class="astro-4yphtoen">Dark</option><option value="light" class="astro-4yphtoen">Light</option><option value="auto" selected class="astro-4yphtoen">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label>  </starlight-theme-select>  <script>
+	StarlightThemeProvider.updatePickers();
+</script> <script type="module">const r="starlight-theme",o=e=>e==="auto"||e==="dark"||e==="light"?e:"auto",c=()=>o(typeof localStorage<"u"&&localStorage.getItem(r));function n(e){typeof localStorage<"u"&&localStorage.setItem(r,e==="light"||e==="dark"?e:"")}const l=()=>matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";function t(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e==="auto"?l():e,n(e)}matchMedia("(prefers-color-scheme: light)").addEventListener("change",()=>{c()==="auto"&&t("auto")});class s extends HTMLElement{constructor(){super(),t(c()),this.querySelector("select")?.addEventListener("change",a=>{a.currentTarget instanceof HTMLSelectElement&&t(o(a.currentTarget.value))})}}customElements.define("starlight-theme-select",s);</script> <script type="module">class s extends HTMLElement{constructor(){super();const e=this.querySelector("select");e&&(e.addEventListener("change",t=>{t.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=t.currentTarget.value)}),window.addEventListener("pageshow",t=>{if(!t.persisted)return;const n=e.querySelector("option[selected]")?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}}customElements.define("starlight-lang-select",s);</script> </div> </div> </header> <nav class="sidebar print:hidden astro-vrdttmbt" aria-label="Main"> <starlight-menu-button class="print:hidden astro-jif73yzw"> <button aria-expanded="false" aria-label="Menu" aria-controls="starlight__sidebar" class="sl-flex md:sl-hidden astro-jif73yzw"> <svg aria-hidden="true" class="open-menu astro-jif73yzw astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg> <svg aria-hidden="true" class="close-menu astro-jif73yzw astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg> </button> </starlight-menu-button> <script type="module">class s extends HTMLElement{constructor(){super(),this.btn=this.querySelector("button"),this.btn.addEventListener("click",()=>this.toggleExpanded());const t=this.closest("nav");t&&t.addEventListener("keyup",e=>this.closeOnEscape(e))}setExpanded(t){this.setAttribute("aria-expanded",String(t)),document.body.toggleAttribute("data-mobile-menu-expanded",t)}toggleExpanded(){this.setExpanded(this.getAttribute("aria-expanded")!=="true")}closeOnEscape(t){t.code==="Escape"&&(this.setExpanded(!1),this.btn.focus())}}customElements.define("starlight-menu-button",s);</script>   <div id="starlight__sidebar" class="sidebar-pane astro-vrdttmbt"> <div class="sidebar-content sl-flex astro-vrdttmbt"> <sl-sidebar-state-persist data-hash="1idj8kr" class="astro-kku4brbg"> <script aria-hidden="true">
+		(() => {
+			try {
+				if (!matchMedia('(min-width: 50em)').matches) return;
+				/** @type {HTMLElement | null} */
+				const target = document.querySelector('sl-sidebar-state-persist');
+				const state = JSON.parse(sessionStorage.getItem('sl-sidebar-state') || '0');
+				if (!target || !state || target.dataset.hash !== state.hash) return;
+				window._starlightScrollRestore = state.scroll;
+				customElements.define(
+					'sl-sidebar-restore',
+					class SidebarRestore extends HTMLElement {
+						connectedCallback() {
+							try {
+								const idx = parseInt(this.dataset.index || '');
+								const details = this.closest('details');
+								if (details && typeof state.open[idx] === 'boolean') details.open = state.open[idx];
+							} catch {}
+						}
+					}
+				);
+			} catch {}
+		})();
+	</script>  <ul class="top-level astro-3ii7xxms"> <li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Overview</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="0"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/docs/overview/analog-intelligence-infrastructure-layer/" aria-current="false" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">The Analog Intelligence Infrastructure Layer</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/docs/overview/questions-and-answers/" aria-current="false" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Questions &amp; Answers</span>  </a> </li> </ul>  </details> </li><li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Concepts</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="1"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/docs/concepts/intelligence-transmission-not-data/" aria-current="false" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Intelligence Transmission, Not Data</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/docs/concepts/macro-shift-age-of-inference/" aria-current="false" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">The Macro Shift: Age of Inference</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/docs/concepts/shift-to-local-computing/" aria-current="false" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">The Shift to Local Computing</span>  </a> </li> </ul>  </details> </li><li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Architecture</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="2"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/docs/architecture/virtual-frequency-space/" aria-current="false" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Virtual Frequency Space</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/docs/architecture/evolution-to-e8-geometric-compute/" aria-current="false" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Evolution to E8 Geometric Compute</span>  </a> </li> </ul>  </details> </li><li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Benchmarks</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="3"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/docs/benchmarks/performance-benchmarks/" aria-current="false" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Performance Benchmarks</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/docs/benchmarks/joules-per-decision/" aria-current="page" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Joules per Fill, Joules per Decision</span>  </a> </li><li class="astro-3ii7xxms"> <a href="/docs/benchmarks/industry-context/" aria-current="false" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Industry Context</span>  </a> </li> </ul>  </details> </li><li class="astro-3ii7xxms"> <details open class="astro-3ii7xxms"> <summary class="astro-3ii7xxms"> <span class="group-label astro-3ii7xxms"> <span class="large astro-3ii7xxms">Resources</span>  </span> <svg aria-hidden="true" class="caret astro-3ii7xxms astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.25rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg> </summary> <sl-sidebar-restore data-index="4"></sl-sidebar-restore> <ul class="astro-3ii7xxms"> <li class="astro-3ii7xxms"> <a href="/docs/resources/video-briefings/" aria-current="false" class="astro-3ii7xxms"> <span class="astro-3ii7xxms">Video Briefings</span>  </a> </li> </ul>  </details> </li> </ul>   <script aria-hidden="true">
+		(() => {
+			const scroller = document.getElementById('starlight__sidebar');
+			if (!window._starlightScrollRestore || !scroller) return;
+			scroller.scrollTop = window._starlightScrollRestore;
+			delete window._starlightScrollRestore;
+		})();
+	</script> </sl-sidebar-state-persist>  <div class="md:sl-hidden"> <div class="mobile-preferences sl-flex astro-wu23bvmt"> <div class="social-icons astro-wu23bvmt">  </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-4yphtoen"> <span class="sr-only astro-4yphtoen">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select autocomplete="off" class="astro-4yphtoen"> <option value="dark" class="astro-4yphtoen">Dark</option><option value="light" class="astro-4yphtoen">Light</option><option value="auto" selected class="astro-4yphtoen">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label>  </starlight-theme-select>  <script>
+	StarlightThemeProvider.updatePickers();
+</script>   </div>  </div> </div> </div> </nav> <div class="main-frame astro-vrdttmbt">  <script type="module">const a=document.getElementById("starlight__sidebar"),n=a?.querySelector("sl-sidebar-state-persist"),o="sl-sidebar-state",i=()=>{let t=[];const e=n?.dataset.hash||"";try{const s=sessionStorage.getItem(o),r=JSON.parse(s||"{}");Array.isArray(r.open)&&r.hash===e&&(t=r.open)}catch{}return{hash:e,open:t,scroll:a?.scrollTop||0}},c=t=>{try{sessionStorage.setItem(o,JSON.stringify(t))}catch{}},d=()=>c(i()),l=(t,e)=>{const s=i();s.open[e]=t,c(s)};n?.addEventListener("click",t=>{if(!(t.target instanceof Element))return;const e=t.target.closest("summary")?.closest("details");if(!e)return;const s=e.querySelector("sl-sidebar-restore"),r=parseInt(s?.dataset.index||"");isNaN(r)||l(!e.open,r)});addEventListener("visibilitychange",()=>{document.visibilityState==="hidden"&&d()});addEventListener("pageHide",d);</script> <div class="lg:sl-flex astro-67yu43on"> <aside class="right-sidebar-container print:hidden astro-67yu43on"> <div class="right-sidebar astro-67yu43on"> <script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C181hMzK.js"></script><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.CKWWgpjV.js"></script><div class="lg:sl-hidden astro-pb3aqygn"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-doynk5tl"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-doynk5tl"><details id="starlight__mobile-toc" class="astro-doynk5tl"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-doynk5tl"><span class="toggle sl-flex astro-doynk5tl">On this page<svg aria-hidden="true" class="caret astro-doynk5tl astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-doynk5tl"></span></summary><div class="dropdown astro-doynk5tl"><ul class="isMobile astro-g2bywc46" style="--depth: 0;"> <li class="astro-g2bywc46" style="--depth: 0;"> <a href="#_top" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#headline-per-joule-metrics" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Headline Per-Joule Metrics</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#executive-one-liners--interactive-schematics" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Executive One-Liners &amp; Interactive Schematics</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#architectural-infographic-plates" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Architectural Infographic Plates</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#1-measured-catalog-compression--native-decode-baseline" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">1. Measured Catalog Compression &amp; Native Decode Baseline</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#2-data-movement-physics-where-a-byte-travels-changes-its-cost-by-10000000" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">2. Data Movement Physics: Where a Byte Travels Changes Its Cost by 10,000,000×</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#3-software-vs-7-nm-fixed-function-silicon-decoder" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">3. Software vs. 7 nm Fixed-Function Silicon Decoder</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#4-compounding-hop--byte-energy-cuts" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">4. Compounding Hop × Byte Energy Cuts</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#5-ai-decision-economics-the-864-joule-decision--211-multiplier" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">5. AI Decision Economics: The 864-Joule Decision &amp; 211× Multiplier</span> </a> <ul class="isMobile astro-g2bywc46" style="--depth: 1;"> <li class="astro-g2bywc46" style="--depth: 1;"> <a href="#anatomy-of-a-median-ai-decision-864-joules--024-wh" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Anatomy of a Median AI Decision (864 Joules = 0.24 Wh)</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#why-1-saved-joule-is-worth-211-its-electricity-cost" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Why 1 Saved Joule Is Worth 211× Its Electricity Cost</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#annual-savings-per-1-trillion-ai-decisions-805-compounding-hop--byte-cut" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Annual Savings per 1 Trillion AI Decisions (80.5% Compounding Hop × Byte Cut)</span> </a>  </li> </ul>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#6-the-complete-per-joule-scorecard-measured-vs-modeled" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">6. The Complete Per-Joule Scorecard (Measured vs. Modeled)</span> </a>  </li> </ul> </div></details></nav></mobile-starlight-toc></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-pb3aqygn"><div class="sl-container astro-pb3aqygn"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-g2bywc46" style="--depth: 0;"> <li class="astro-g2bywc46" style="--depth: 0;"> <a href="#_top" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#headline-per-joule-metrics" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Headline Per-Joule Metrics</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#executive-one-liners--interactive-schematics" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Executive One-Liners &amp; Interactive Schematics</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#architectural-infographic-plates" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Architectural Infographic Plates</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#1-measured-catalog-compression--native-decode-baseline" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">1. Measured Catalog Compression &amp; Native Decode Baseline</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#2-data-movement-physics-where-a-byte-travels-changes-its-cost-by-10000000" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">2. Data Movement Physics: Where a Byte Travels Changes Its Cost by 10,000,000×</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#3-software-vs-7-nm-fixed-function-silicon-decoder" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">3. Software vs. 7 nm Fixed-Function Silicon Decoder</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#4-compounding-hop--byte-energy-cuts" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">4. Compounding Hop × Byte Energy Cuts</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#5-ai-decision-economics-the-864-joule-decision--211-multiplier" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">5. AI Decision Economics: The 864-Joule Decision &amp; 211× Multiplier</span> </a> <ul class="astro-g2bywc46" style="--depth: 1;"> <li class="astro-g2bywc46" style="--depth: 1;"> <a href="#anatomy-of-a-median-ai-decision-864-joules--024-wh" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Anatomy of a Median AI Decision (864 Joules = 0.24 Wh)</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#why-1-saved-joule-is-worth-211-its-electricity-cost" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Why 1 Saved Joule Is Worth 211× Its Electricity Cost</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#annual-savings-per-1-trillion-ai-decisions-805-compounding-hop--byte-cut" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Annual Savings per 1 Trillion AI Decisions (80.5% Compounding Hop × Byte Cut)</span> </a>  </li> </ul>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#6-the-complete-per-joule-scorecard-measured-vs-modeled" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">6. The Complete Per-Joule Scorecard (Measured vs. Modeled)</span> </a>  </li> </ul> </nav></starlight-toc></div></div> </div> </aside> <div class="main-pane astro-67yu43on">  <main data-pagefind-body class="astro-bguv2lll" lang="en" dir="ltr">    <div class="content-panel astro-7nkwcw3z"> <div class="sl-container astro-7nkwcw3z"> <h1 id="_top" class="astro-j6tvhyss">Joules per Fill, Joules per Decision</h1>  </div> </div>  <div class="content-panel astro-7nkwcw3z"> <div class="sl-container astro-7nkwcw3z"> <div class="sl-markdown-content"> <div class="nm-kicker"><p class="nm-kicker__tagline">“An AI system does not buy bytes or raw electricity — it buys decisions.”</p><p class="nm-kicker__byline">NEOMORPHIC Research Labs · Energy &#x26; Decision Economics Study · 28 October 2026</p></div>
+<p>A byte saved is not just storage saved — it is <strong>energy saved on every physical hop</strong> and <strong>high-value accelerator time freed on every AI decision</strong>. This page distills our 17-page energy accounting study (<em>Joules per Fill, Joules per Decision</em>) into plain-English one-liners, custom architectural schematics, and complete reference tables.</p>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="headline-per-joule-metrics">Headline Per-Joule Metrics</h2><a class="sl-anchor-link" href="#headline-per-joule-metrics"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Headline Per-Joule Metrics”</span></a></div>
+<div class="nm-metrics"><div class="nm-metric nm-metric--healthy"><p class="nm-metric__label">Catalog Byte Reduction</p><p class="nm-metric__value">−61.0%</p><p class="nm-metric__note">2,273 exact E8 addresses in 3,549 B vs. 9,092 B raw (12.49 bits/address · Measured)</p></div><div class="nm-metric"><p class="nm-metric__label">Native Decode Speed</p><p class="nm-metric__value">19.7 µs</p><p class="nm-metric__note">Full 2,273-address table unpacked in native Rust (8.67 ns/addr · Measured)</p></div><div class="nm-metric nm-metric--healthy"><p class="nm-metric__label">Silicon Decoder Efficiency</p><p class="nm-metric__value">204B / J</p><p class="nm-metric__note">30B–204B addresses/Joule in 7 nm fixed-function hardware (4.9–32.9 pJ/addr · Modeled)</p></div><div class="nm-metric"><p class="nm-metric__label">Single WAN Transfer Saved</p><p class="nm-metric__value">1.20 J</p><p class="nm-metric__note">20,000× more energy saved than software decode cost · 99.995% net kept</p></div><div class="nm-metric nm-metric--healthy"><p class="nm-metric__label">Accelerator Joule Value</p><p class="nm-metric__value">211×</p><p class="nm-metric__note">Freed GPU compute time ($0.00250) is worth 211× the raw electricity ($0.0000204)</p></div><div class="nm-metric"><p class="nm-metric__label">Compounding Hop × Byte Cut</p><p class="nm-metric__value">Up to 96.1%</p><p class="nm-metric__note">80.5% energy cut at 50% fewer hops · 96.1% cut at 90% fewer hops</p></div></div>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="executive-one-liners--interactive-schematics">Executive One-Liners &#x26; Interactive Schematics</h2><a class="sl-anchor-link" href="#executive-one-liners--interactive-schematics"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Executive One-Liners &#x26; Interactive Schematics”</span></a></div>
+<div class="nm-joules-cards not-content astro-atwgfand"> <article class="nm-jcard astro-atwgfand"> <div class="nm-jcard__screen viz-transport astro-atwgfand" aria-hidden="true"> <span class="nm-jcard__k astro-atwgfand">JLE. 01 · DATA MOVEMENT PHYSICS</span> <span class="nm-jcard__badge astro-atwgfand">20,000× NETWORK WIN</span> <svg viewBox="0 0 480 236" class="astro-atwgfand"> <defs class="astro-atwgfand"> <linearGradient id="dj-grad-mint-1" x1="0" y1="0" x2="1" y2="0" class="astro-atwgfand"> <stop offset="0%" stop-color="#A8D8F8" class="astro-atwgfand"></stop> <stop offset="100%" stop-color="#9EF0D8" class="astro-atwgfand"></stop> </linearGradient> <linearGradient id="dj-grad-purple-1" x1="0" y1="0" x2="1" y2="0" class="astro-atwgfand"> <stop offset="0%" stop-color="#8E9CFF" class="astro-atwgfand"></stop> <stop offset="100%" stop-color="#C9B8F6" class="astro-atwgfand"></stop> </linearGradient> </defs> <g transform="translate(20 40)" class="astro-atwgfand"> <rect width="176" height="176" rx="10" class="j-box astro-atwgfand"></rect> <text x="12" y="18" class="j-svg-k astro-atwgfand">PHYSICAL HOP TOPOLOGY</text> <g transform="translate(46 54)" class="astro-atwgfand"> <polygon points="0,-12 28,0 0,12 -28,0" fill="#A8D8F8" stroke="#0C0B14" stroke-width="1" class="astro-atwgfand"></polygon> <polygon points="-28,0 0,12 0,22 -28,10" fill="#465899" stroke="#0C0B14" stroke-width="1" class="astro-atwgfand"></polygon> <polygon points="0,12 28,0 28,10 0,22" fill="#6D84CC" stroke="#0C0B14" stroke-width="1" class="astro-atwgfand"></polygon> <polygon points="-28,10 0,22 0,32 -28,20" fill="#324073" stroke="#0C0B14" stroke-width="1" class="astro-atwgfand"></polygon> <polygon points="0,22 28,10 28,20 0,32" fill="#5266AD" stroke="#0C0B14" stroke-width="1" class="astro-atwgfand"></polygon> <text x="0" y="45" text-anchor="middle" class="j-svg-lbl astro-atwgfand">HBM2 DIE</text> </g> <path d="M 78 64 C 98 44, 108 84, 126 64" fill="none" stroke="#9EF0D8" stroke-width="1.8" stroke-dasharray="3 3" class="astro-atwgfand"></path> <circle cx="102" cy="64" r="3.5" fill="#9EF0D8" class="j-pulse-node astro-atwgfand"></circle> <g transform="translate(142 64)" class="astro-atwgfand"> <circle cx="0" cy="0" r="21" fill="rgba(158,240,216,0.1)" stroke="#9EF0D8" stroke-width="1.4" class="astro-atwgfand"></circle> <ellipse cx="0" cy="0" rx="21" ry="8" fill="none" stroke="#A8D8F8" stroke-width="1" stroke-dasharray="2 2" class="astro-atwgfand"></ellipse> <ellipse cx="0" cy="0" rx="9" ry="21" fill="none" stroke="#C9B8F6" stroke-width="1" stroke-dasharray="2 2" class="astro-atwgfand"></ellipse> <circle cx="0" cy="-8" r="2.5" fill="#ffffff" class="astro-atwgfand"></circle> <text x="0" y="35" text-anchor="middle" class="j-svg-lbl j-svg-val--mint astro-atwgfand">WAN HOP</text> </g> <rect x="12" y="114" width="152" height="50" rx="7" fill="rgba(12,11,20,0.9)" stroke="rgba(158,240,216,0.35)" class="astro-atwgfand"></rect> <text x="20" y="131" class="j-svg-k j-svg-val--mint astro-atwgfand">1 INTERNET FILL SAVES</text> <text x="20" y="151" class="j-svg-med j-svg-val--mint astro-atwgfand">1.20 JOULES</text> </g> <g transform="translate(208 40)" class="astro-atwgfand"> <rect width="252" height="176" rx="10" class="j-box j-box--mint astro-atwgfand"></rect> <text x="14" y="18" class="j-svg-k astro-atwgfand">ENERGY PER BIT MOVED (10⁷× SPAN)</text> <text x="14" y="42" class="j-svg-lbl astro-atwgfand">HBM2 ON-CHIP</text> <rect x="14" y="47" width="38" height="10" rx="3" fill="#A8D8F8" class="astro-atwgfand"></rect> <text x="58" y="55" class="j-svg-val astro-atwgfand">3.97 pJ / bit</text> <text x="14" y="75" class="j-svg-lbl astro-atwgfand">DDR3 DRAM BUS (17.6×)</text> <rect x="14" y="80" width="92" height="10" rx="3" fill="url(#dj-grad-purple-1)" class="astro-atwgfand"></rect> <text x="112" y="88" class="j-svg-val astro-atwgfand">70.0 pJ / bit</text> <text x="14" y="108" class="j-svg-lbl astro-atwgfand">INTERNET HOP (6.8×10⁶×)</text> <rect x="14" y="113" width="148" height="10" rx="3" fill="url(#dj-grad-mint-1)" class="astro-atwgfand"></rect> <text x="168" y="121" class="j-svg-val j-svg-val--mint astro-atwgfand">27.0 µJ/b</text> <rect x="14" y="135" width="224" height="29" rx="6" fill="rgba(158,240,216,0.1)" stroke="rgba(158,240,216,0.4)" class="astro-atwgfand"></rect> <text x="126" y="153" text-anchor="middle" class="j-svg-val j-svg-val--mint astro-atwgfand">
+99.995% NET ENERGY KEPT ON WAN
+</text> </g> </svg>    </div> <div class="nm-jcard__body astro-atwgfand"> <h3 class="nm-jcard__title astro-atwgfand">1. Where a Byte Travels Changes Its Energy Cost by 10,000,000×</h3> <p class="nm-jcard__oneliner astro-atwgfand">Moving a byte across the internet costs nearly 10 million times more energy than moving it on-chip.</p> <ul class="nm-jcard__list astro-atwgfand"> <li class="astro-atwgfand">On-chip HBM2 memory moves data for just 3.97 picojoules per bit; internet transport costs 27 microjoules per bit.</li><li class="astro-atwgfand">A single 3,549-byte compressed catalog transfer across the internet saves 1.20 Joules — 20,000× more energy than the native decoder spends unpacking it.</li><li class="astro-atwgfand">Result: software decoding keeps 99.995% of the energy savings across every network and cloud transfer.</li> </ul> </div> </article><article class="nm-jcard astro-atwgfand"> <div class="nm-jcard__screen viz-silicon astro-atwgfand" aria-hidden="true"> <span class="nm-jcard__k astro-atwgfand">JLE. 02 · SILICON DECODER ARCHITECTURE</span> <span class="nm-jcard__badge astro-atwgfand">204B ADDRESSES / JOULE</span>  <svg viewBox="0 0 480 236" class="astro-atwgfand"> <g transform="translate(20 40)" class="astro-atwgfand"> <rect width="194" height="176" rx="10" class="j-box astro-atwgfand"></rect> <text x="12" y="18" class="j-svg-k astro-atwgfand">7 NM FIXED-FUNCTION IC DIE</text> <g transform="translate(97 96)" class="astro-atwgfand">  <rect x="-39" y="-60" width="6" height="8" rx="1.5" fill="#A8D8F8" class="astro-atwgfand"></rect> <rect x="-39" y="52" width="6" height="8" rx="1.5" fill="#9EF0D8" class="astro-atwgfand"></rect> <rect x="-68" y="-39" width="8" height="6" rx="1.5" fill="#C9B8F6" class="astro-atwgfand"></rect> <rect x="60" y="-39" width="8" height="6" rx="1.5" fill="#9EF0D8" class="astro-atwgfand"></rect>  <rect x="-21" y="-60" width="6" height="8" rx="1.5" fill="#A8D8F8" class="astro-atwgfand"></rect> <rect x="-21" y="52" width="6" height="8" rx="1.5" fill="#9EF0D8" class="astro-atwgfand"></rect> <rect x="-68" y="-21" width="8" height="6" rx="1.5" fill="#C9B8F6" class="astro-atwgfand"></rect> <rect x="60" y="-21" width="8" height="6" rx="1.5" fill="#9EF0D8" class="astro-atwgfand"></rect>  <rect x="-3" y="-60" width="6" height="8" rx="1.5" fill="#A8D8F8" class="astro-atwgfand"></rect> <rect x="-3" y="52" width="6" height="8" rx="1.5" fill="#9EF0D8" class="astro-atwgfand"></rect> <rect x="-68" y="-3" width="8" height="6" rx="1.5" fill="#C9B8F6" class="astro-atwgfand"></rect> <rect x="60" y="-3" width="8" height="6" rx="1.5" fill="#9EF0D8" class="astro-atwgfand"></rect>  <rect x="15" y="-60" width="6" height="8" rx="1.5" fill="#A8D8F8" class="astro-atwgfand"></rect> <rect x="15" y="52" width="6" height="8" rx="1.5" fill="#9EF0D8" class="astro-atwgfand"></rect> <rect x="-68" y="15" width="8" height="6" rx="1.5" fill="#C9B8F6" class="astro-atwgfand"></rect> <rect x="60" y="15" width="8" height="6" rx="1.5" fill="#9EF0D8" class="astro-atwgfand"></rect>  <rect x="33" y="-60" width="6" height="8" rx="1.5" fill="#A8D8F8" class="astro-atwgfand"></rect> <rect x="33" y="52" width="6" height="8" rx="1.5" fill="#9EF0D8" class="astro-atwgfand"></rect> <rect x="-68" y="33" width="8" height="6" rx="1.5" fill="#C9B8F6" class="astro-atwgfand"></rect> <rect x="60" y="33" width="8" height="6" rx="1.5" fill="#9EF0D8" class="astro-atwgfand"></rect>  <rect x="-60" y="-52" width="120" height="104" rx="8" fill="#141225" stroke="#A8D8F8" stroke-width="1.6" class="astro-atwgfand"></rect> <rect x="-48" y="-40" width="96" height="80" rx="5" fill="rgba(158,240,216,0.08)" stroke="#9EF0D8" stroke-width="1.2" class="astro-atwgfand"></rect> <rect x="-42" y="-30" width="26" height="36" rx="3" fill="#1F1C38" stroke="#A8D8F8" stroke-width="1" class="astro-atwgfand"></rect> <text x="-29" y="-10" text-anchor="middle" class="j-stage-v astro-atwgfand">&gt;&gt;</text> <rect x="-13" y="-30" width="26" height="36" rx="3" fill="#1F1C38" stroke="#C9B8F6" stroke-width="1" class="astro-atwgfand"></rect> <text x="0" y="-10" text-anchor="middle" class="j-stage-v astro-atwgfand">&amp;</text> <rect x="16" y="-30" width="26" height="36" rx="3" fill="#1F1C38" stroke="#9EF0D8" stroke-width="1" class="astro-atwgfand"></rect> <text x="29" y="-10" text-anchor="middle" class="j-stage-v j-svg-val--mint astro-atwgfand">+</text> <text x="0" y="24" text-anchor="middle" class="j-svg-val j-svg-val--mint astro-atwgfand">27.05 OPS · 0 MULT</text> </g> </g> <g transform="translate(226 40)" class="astro-atwgfand"> <rect width="234" height="82" rx="10" class="j-box astro-atwgfand"></rect> <text x="14" y="19" class="j-svg-k astro-atwgfand">SOFTWARE DECODER (1–3 W CORE)</text> <text x="14" y="44" class="j-svg-med astro-atwgfand">38M – 115M / J</text> <text x="14" y="64" class="j-svg-sub astro-atwgfand">19.7 µs full table · 8.67 ns / address</text> <rect y="94" width="234" height="82" rx="10" class="j-box j-box--mint astro-atwgfand"></rect> <text x="14" y="113" class="j-svg-k j-svg-val--mint astro-atwgfand">7 NM SILICON (4.9–32.9 pJ / ADDR)</text> <text x="14" y="138" class="j-svg-med j-svg-val--mint astro-atwgfand">30B – 204B / J</text> <text x="14" y="158" class="j-svg-sub astro-atwgfand">12.5B addr/s @ 50 GB/s · 99.6% net saved</text> </g> </svg>   </div> <div class="nm-jcard__body astro-atwgfand"> <h3 class="nm-jcard__title astro-atwgfand">2. 27 Simple Operations in Silicon — Zero Multipliers Required</h3> <p class="nm-jcard__oneliner astro-atwgfand">A dedicated hardware decoder unpacks up to 204 billion exact addresses per joule.</p> <ul class="nm-jcard__list astro-atwgfand"> <li class="astro-atwgfand">Each address takes an average of just 27.05 basic bit operations (shifts, masks, and integer adds) with no multipliers.</li><li class="astro-atwgfand">In 7 nm silicon, decoding costs just 4.9 to 32.9 picojoules per address — retaining 57.5% to 99.6% of net energy savings directly on HBM2 and DDR3 memory paths.</li><li class="astro-atwgfand">At 50 GB/s memory bandwidth, one tiny decoder block streams 12.5 billion addresses per second on 0.025 to 0.375 Watts.</li> </ul> </div> </article><article class="nm-jcard astro-atwgfand"> <div class="nm-jcard__screen viz-multiplier astro-atwgfand" aria-hidden="true"> <span class="nm-jcard__k astro-atwgfand">JLE. 03 · THE 211× ECONOMIC MULTIPLIER</span> <span class="nm-jcard__badge astro-atwgfand">211× VALUE PER JOULE</span>   <svg viewBox="0 0 480 236" class="astro-atwgfand"> <defs class="astro-atwgfand"> <linearGradient id="dj-grad-mint-3" x1="0" y1="0" x2="1" y2="0" class="astro-atwgfand"> <stop offset="0%" stop-color="#A8D8F8" class="astro-atwgfand"></stop> <stop offset="100%" stop-color="#9EF0D8" class="astro-atwgfand"></stop> </linearGradient> </defs> <g transform="translate(20 40)" class="astro-atwgfand"> <rect width="196" height="176" rx="10" class="j-box astro-atwgfand"></rect> <text x="12" y="18" class="j-svg-k astro-atwgfand">MEDIAN AI DECISION (864 J)</text> <g transform="translate(60 98)" class="astro-atwgfand"> <circle cx="0" cy="0" r="38" fill="none" stroke="#C9B8F6" stroke-width="12" stroke-dasharray="139.2 238.8" transform="rotate(-90)" class="astro-atwgfand"></circle> <circle cx="0" cy="0" r="38" fill="none" stroke="#A8D8F8" stroke-width="12" stroke-dasharray="59.7 238.8" stroke-dashoffset="-139.2" transform="rotate(-90)" class="astro-atwgfand"></circle> <circle cx="0" cy="0" r="38" fill="none" stroke="#9EF0D8" stroke-width="12" stroke-dasharray="39.9 238.8" stroke-dashoffset="-198.9" transform="rotate(-90)" class="astro-atwgfand"></circle> <circle cx="0" cy="0" r="26" fill="#0C0B14" class="astro-atwgfand"></circle> <text x="0" y="-1" text-anchor="middle" class="j-stage-v astro-atwgfand">864 J</text> <text x="0" y="10" text-anchor="middle" class="j-stage-k j-svg-val--mint astro-atwgfand">0.24 Wh</text> </g> <g transform="translate(110 64)" class="astro-atwgfand"> <circle cx="4" cy="4" r="3.5" fill="#C9B8F6" class="astro-atwgfand"></circle> <text x="12" y="7" class="j-svg-sub astro-atwgfand">58% GPU (504J)</text> <circle cx="4" cy="28" r="3.5" fill="#A8D8F8" class="astro-atwgfand"></circle> <text x="12" y="31" class="j-svg-sub astro-atwgfand">25% Host (216J)</text> <circle cx="4" cy="52" r="3.5" fill="#9EF0D8" class="astro-atwgfand"></circle> <text x="12" y="55" class="j-svg-sub astro-atwgfand">17% Idle (144J)</text> </g> <text x="12" y="162" class="j-svg-sub astro-atwgfand">8-GPU Server Inference Profile</text> </g> <g transform="translate(228 40)" class="astro-atwgfand"> <rect width="232" height="176" rx="10" class="j-box j-box--mint astro-atwgfand"></rect> <text x="14" y="18" class="j-svg-k j-svg-val--mint astro-atwgfand">WHAT ONE JOULE BUYS IN AI</text> <text x="14" y="42" class="j-svg-lbl astro-atwgfand">RAW ELECTRICITY (0.8%)</text> <rect x="14" y="48" width="12" height="12" rx="3" fill="#A8D8F8" class="astro-atwgfand"></rect> <text x="32" y="58" class="j-svg-val astro-atwgfand">$0.0000204 / decision</text> <text x="14" y="82" class="j-svg-lbl astro-atwgfand">GPU COMPUTE TIME (99.2%)</text> <rect x="14" y="88" width="204" height="14" rx="4" fill="url(#dj-grad-mint-3)" class="astro-atwgfand"></rect> <text x="14" y="122" class="j-svg-med j-svg-val--mint astro-atwgfand">211× MORE VALUABLE</text> <rect x="14" y="134" width="204" height="30" rx="6" fill="rgba(12,11,20,0.85)" stroke="rgba(158,240,216,0.35)" class="astro-atwgfand"></rect> <text x="116" y="153" text-anchor="middle" class="j-svg-val j-svg-val--mint astro-atwgfand">
+$13.7M–$68.6M / YR PER 1T DECISIONS
+</text> </g> </svg>  </div> <div class="nm-jcard__body astro-atwgfand"> <h3 class="nm-jcard__title astro-atwgfand">3. A Saved Joule of GPU Time Is Worth 211× Its Electricity Cost</h3> <p class="nm-jcard__oneliner astro-atwgfand">An AI system doesn’t buy bytes or raw electricity — it buys decisions.</p> <ul class="nm-jcard__list astro-atwgfand"> <li class="astro-atwgfand">A median AI decision consumes 864 Joules (0.24 Wh), of which raw electricity is just 0.8% of the cost ($0.0000204).</li><li class="astro-atwgfand">The other 99.2% ($0.00250 per decision) is the cost of the AI accelerator time occupied while moving and waiting on memory.</li><li class="astro-atwgfand">Every joule saved frees high-value GPU capacity worth 211× the price of the electricity itself.</li> </ul> </div> </article><article class="nm-jcard astro-atwgfand"> <div class="nm-jcard__screen viz-compound astro-atwgfand" aria-hidden="true"> <span class="nm-jcard__k astro-atwgfand">JLE. 04 · COMPOUNDING HOP × BYTE CUTS</span> <span class="nm-jcard__badge astro-atwgfand">UP TO 96.1% ENERGY CUT</span>    <svg viewBox="0 0 480 236" class="astro-atwgfand"> <defs class="astro-atwgfand"> <linearGradient id="dj-grad-mint-4" x1="0" y1="0" x2="1" y2="0" class="astro-atwgfand"> <stop offset="0%" stop-color="#A8D8F8" class="astro-atwgfand"></stop> <stop offset="100%" stop-color="#9EF0D8" class="astro-atwgfand"></stop> </linearGradient> </defs> <g transform="translate(20 40)" class="astro-atwgfand"> <rect width="168" height="176" rx="10" class="j-box astro-atwgfand"></rect> <text x="12" y="18" class="j-svg-k astro-atwgfand">HOP × BYTE GEOMETRY</text> <text x="12" y="40" class="j-svg-sub astro-atwgfand">Legacy Multi-Hop (100%)</text> <polyline points="16,66 36,48 56,70 76,48 96,70 116,48 136,70 152,54" fill="none" stroke="rgba(201,184,246,0.45)" stroke-width="1.5" stroke-dasharray="3 2" class="astro-atwgfand"></polyline> <circle cx="16" cy="66" r="2.5" fill="#C9B8F6" class="astro-atwgfand"></circle><circle cx="36" cy="48" r="2.5" fill="#C9B8F6" class="astro-atwgfand"></circle><circle cx="56" cy="70" r="2.5" fill="#C9B8F6" class="astro-atwgfand"></circle><circle cx="76" cy="48" r="2.5" fill="#C9B8F6" class="astro-atwgfand"></circle><circle cx="96" cy="70" r="2.5" fill="#C9B8F6" class="astro-atwgfand"></circle><circle cx="116" cy="48" r="2.5" fill="#C9B8F6" class="astro-atwgfand"></circle><circle cx="136" cy="70" r="2.5" fill="#C9B8F6" class="astro-atwgfand"></circle><circle cx="152" cy="48" r="2.5" fill="#C9B8F6" class="astro-atwgfand"></circle> <text x="12" y="102" class="j-svg-val j-svg-val--mint astro-atwgfand">NEOMORPHIC™ 2-Hop</text> <line x1="18" y1="126" x2="84" y2="114" stroke="#9EF0D8" stroke-width="2.4" class="astro-atwgfand"></line> <line x1="84" y1="114" x2="150" y2="126" stroke="#9EF0D8" stroke-width="2.4" class="astro-atwgfand"></line> <circle cx="18" cy="126" r="4.5" fill="#A8D8F8" class="astro-atwgfand"></circle> <circle cx="84" cy="114" r="5" fill="#9EF0D8" class="j-pulse-node astro-atwgfand"></circle> <circle cx="150" cy="126" r="4.5" fill="#ffffff" stroke="#9EF0D8" stroke-width="2" class="astro-atwgfand"></circle> <text x="12" y="158" class="j-svg-sub astro-atwgfand">39% Bytes × Fewer Hops</text> </g> <g transform="translate(200 40)" class="astro-atwgfand"> <rect width="260" height="176" rx="10" class="j-box j-box--mint astro-atwgfand"></rect> <text x="14" y="18" class="j-svg-k astro-atwgfand">TOTAL MOVEMENT ENERGY CUT (c_E)</text> <g transform="translate(14 30)" class="astro-atwgfand"> <text x="0" y="12" class="j-svg-lbl astro-atwgfand">100% HOPS</text> <rect x="68" y="3" width="98" height="11" rx="3" fill="#A8D8F8" opacity="0.8" class="astro-atwgfand"></rect> <text x="172" y="12" class="j-svg-val astro-atwgfand">61.0% Cut</text> <text x="0" y="39" class="j-svg-lbl astro-atwgfand">75% HOPS</text> <rect x="68" y="30" width="114" height="11" rx="3" fill="#A8D8F8" class="astro-atwgfand"></rect> <text x="188" y="39" class="j-svg-val astro-atwgfand">70.7% Cut</text> <text x="0" y="66" class="j-svg-lbl astro-atwgfand">50% HOPS</text> <rect x="68" y="57" width="130" height="11" rx="3" fill="#C9B8F6" class="astro-atwgfand"></rect> <text x="204" y="66" class="j-svg-val j-svg-val--blue astro-atwgfand">80.5% Cut</text> <text x="0" y="93" class="j-svg-lbl astro-atwgfand">25% HOPS</text> <rect x="68" y="84" width="146" height="11" rx="3" fill="url(#dj-grad-mint-4)" class="astro-atwgfand"></rect> <text x="218" y="93" class="j-svg-val j-svg-val--mint astro-atwgfand">90.2%</text> <text x="0" y="120" class="j-svg-lbl astro-atwgfand">10% HOPS</text> <rect x="68" y="111" width="156" height="11" rx="3" fill="#9EF0D8" class="astro-atwgfand"></rect> <text x="228" y="120" class="j-svg-val j-svg-val--mint astro-atwgfand">96.1%</text> </g> </g> </svg> </div> <div class="nm-jcard__body astro-atwgfand"> <h3 class="nm-jcard__title astro-atwgfand">4. Fewer Bytes × Fewer Hops = Exponential Energy Savings</h3> <p class="nm-jcard__oneliner astro-atwgfand">Shrinking address catalogs by 61% and cutting memory hops in half eliminates 80.5% of movement energy.</p> <ul class="nm-jcard__list astro-atwgfand"> <li class="astro-atwgfand">Same path, 61.0% fewer bytes: immediate 61.0% reduction in data-movement energy.</li><li class="astro-atwgfand">50% fewer hops + 61.0% fewer bytes: 80.5% total reduction in movement energy.</li><li class="astro-atwgfand">90% fewer hops + 61.0% fewer bytes: 96.1% total reduction in movement energy.</li> </ul> </div> </article> </div> 
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="architectural-infographic-plates">Architectural Infographic Plates</h2><a class="sl-anchor-link" href="#architectural-infographic-plates"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Architectural Infographic Plates”</span></a></div>
+<figure class="nm-figure nm-figure--ink"> <a class="nm-figure__frame" href="/graphics/G16.webp" target="_blank" rel="noopener" aria-label="Open full-size image: Plate JLE-A — Where a Byte Travels Changes Its Energy Cost by 10,000,000×: 3D isometric energy hierarchy from on-chip HBM2 (3.97 pJ/bit) and off-chip DDR3 (70.0 pJ/bit) to global internet transport (27.0 µJ/bit), paired with the 27.05-op 7 nm fixed-function silicon decoder pipeline."> <img src="/graphics/G16.webp" alt="Per-Joule Data Movement Hierarchy (HBM2 3.97 pJ/bit, DDR3 70 pJ/bit, Internet 27 uJ/bit) and 7nm Silicon Decoder Datapath (30B to 204B addresses per joule)" width="1200" height="860" loading="lazy" decoding="async"> </a> <figcaption> <span class="nm-figure__caption">Plate JLE-A — Where a Byte Travels Changes Its Energy Cost by 10,000,000×: 3D isometric energy hierarchy from on-chip HBM2 (3.97 pJ/bit) and off-chip DDR3 (70.0 pJ/bit) to global internet transport (27.0 µJ/bit), paired with the 27.05-op 7 nm fixed-function silicon decoder pipeline.</span>  <span class="nm-figure__credit">NEOMORPHIC Research Labs · Joules per Fill, Joules per Decision (2026)</span> </figcaption> </figure>
+<figure class="nm-figure nm-figure--ink"> <a class="nm-figure__frame" href="/graphics/G17.webp" target="_blank" rel="noopener" aria-label="Open full-size image: Plate JLE-B — A Saved Joule of GPU Time Is Worth 211× Its Raw Electricity Cost: Breakdown of the 864-Joule median AI decision on an 8-GPU node, the 211× capital-time multiplier over raw electricity, and compounding hop × byte movement energy cuts up to 96.1%."> <img src="/graphics/G17.webp" alt="Anatomy of an 864-Joule AI Decision (58% GPU Accelerators, 25% Host CPU+DRAM, 17% Overhead), the 211x Accelerator Time Multiplier, and Compounding Hop x Byte Energy Cuts up to 96.1%" width="1200" height="860" loading="lazy" decoding="async"> </a> <figcaption> <span class="nm-figure__caption">Plate JLE-B — A Saved Joule of GPU Time Is Worth 211× Its Raw Electricity Cost: Breakdown of the 864-Joule median AI decision on an 8-GPU node, the 211× capital-time multiplier over raw electricity, and compounding hop × byte movement energy cuts up to 96.1%.</span>  <span class="nm-figure__credit">NEOMORPHIC Research Labs · Joules per Fill, Joules per Decision (2026)</span> </figcaption> </figure>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="1-measured-catalog-compression--native-decode-baseline">1. Measured Catalog Compression &#x26; Native Decode Baseline</h2><a class="sl-anchor-link" href="#1-measured-catalog-compression--native-decode-baseline"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “1. Measured Catalog Compression &#x26; Native Decode Baseline”</span></a></div>
+<blockquote>
+<p><strong>One-Liner:</strong> We store <strong>2,273 exact E8 addresses in 3,549 bytes instead of 9,092 bytes</strong> (<strong>61.0% fewer bytes</strong>), and reconstruct the entire table losslessly in <strong>19.7 microseconds</strong>.</p>
+</blockquote>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Metric</th><th>Measured Value</th><th>Notes</th></tr></thead><tbody><tr><td><strong>Address Catalog Size</strong></td><td><strong>2,273 addresses</strong></td><td>Structured E8 geometric address catalog</td></tr><tr><td><strong>Raw 32-Bit Representation</strong></td><td><strong>9,092 bytes</strong></td><td>32 bits (4 bytes) per address</td></tr><tr><td><strong>Prior Compressed Baseline</strong></td><td><strong>3,611 bytes</strong></td><td>12.71 bits per address</td></tr><tr><td><strong>NEOMORPHIC™ Exact Catalog</strong></td><td><strong>3,549 bytes</strong></td><td><strong>12.49 bits per address</strong> (<strong>60.97% fewer bytes</strong> vs. raw; <strong>2.56×</strong> density)</td></tr><tr><td><strong>Bytes Saved per Catalog Fill</strong></td><td><strong>5,543 bytes</strong></td><td><strong>44,344 bits</strong> eliminated per catalog transfer</td></tr><tr><td><strong>Native Rust Decode Time</strong></td><td><strong>19.7 µs</strong></td><td><strong>8.67 ns per address</strong> · 100% exact bit-for-bit reconstruction</td></tr><tr><td><strong>Operations per Decoded Address</strong></td><td><strong>27.05 ops/addr</strong></td><td>Shifts, range masks, and integer adds (<code dir="auto">61,485</code> total ops · <strong>0 multipliers</strong>)</td></tr></tbody></table>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="2-data-movement-physics-where-a-byte-travels-changes-its-cost-by-10000000">2. Data Movement Physics: Where a Byte Travels Changes Its Cost by 10,000,000×</h2><a class="sl-anchor-link" href="#2-data-movement-physics-where-a-byte-travels-changes-its-cost-by-10000000"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “2. Data Movement Physics: Where a Byte Travels Changes Its Cost by 10,000,000×”</span></a></div>
+<blockquote>
+<p><strong>One-Liner:</strong> Moving a bit across the internet costs <strong>nearly 7 million times more energy</strong> than moving it on-chip — so one compressed catalog transfer over the internet saves <strong>20,000× more energy</strong> than the software decoder spends unpacking it.</p>
+</blockquote>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Transport Tier</th><th>Energy per Bit</th><th>Energy per Byte</th><th>Gross Energy Saved per 5,543 B Fill</th><th>Software Decode Cost (19.7 µs @ 1–3 W)</th><th>Net Energy Saved (Software)</th><th>Net Energy Saved (7 nm Silicon)</th></tr></thead><tbody><tr><td><strong>On-Chip 2D NoC (1 mm)</strong></td><td><code dir="auto">0.19 pJ/bit</code></td><td><code dir="auto">1.52 pJ/B</code></td><td><code dir="auto">8.43 nJ</code></td><td><code dir="auto">19.7–59.1 µJ</code></td><td><em>(Use 7 nm HW)</em></td><td><em>(Use 7 nm HW)</em></td></tr><tr><td><strong>HBM2 On-Package Stack</strong></td><td><code dir="auto">3.97 pJ/bit</code></td><td><code dir="auto">31.76 pJ/B</code></td><td><code dir="auto">176.0 nJ</code> <em>(1 fill)</em> / <code dir="auto">43.9 µJ</code> <em>(250×)</em></td><td><code dir="auto">19.7–59.1 µJ</code></td><td>Break-even at 112–336 fills</td><td><strong>57.5% – 93.7% Kept</strong></td></tr><tr><td><strong>DDR3 / Off-Chip DRAM</strong></td><td><code dir="auto">70.0 pJ/bit</code></td><td><code dir="auto">560.0 pJ/B</code></td><td><code dir="auto">3.10 µJ</code> <em>(1 fill)</em> / <code dir="auto">774.2 µJ</code> <em>(250×)</em></td><td><code dir="auto">19.7–59.1 µJ</code></td><td><strong>92.3% – 97.5% Kept</strong> <em>(at 250 fills)</em></td><td><strong>97.6% – 99.6% Kept</strong></td></tr><tr><td><strong>Global Internet (WAN)</strong></td><td><code dir="auto">27.0 µJ/bit</code></td><td><code dir="auto">216.0 µJ/B</code></td><td><strong>1.20 Joules</strong> <em>(1 fill)</em></td><td><code dir="auto">19.7–59.1 µJ</code></td><td><strong>99.995% – 99.998% Kept</strong></td><td><strong>99.9999% Kept</strong></td></tr></tbody></table>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="3-software-vs-7-nm-fixed-function-silicon-decoder">3. Software vs. 7 nm Fixed-Function Silicon Decoder</h2><a class="sl-anchor-link" href="#3-software-vs-7-nm-fixed-function-silicon-decoder"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “3. Software vs. 7 nm Fixed-Function Silicon Decoder”</span></a></div>
+<blockquote>
+<p><strong>One-Liner:</strong> Because decoding uses only <strong>27.05 simple bit-shifts, masks, and integer adds with zero multipliers</strong>, a fixed-function 7 nm hardware block unpacks <strong>30 billion to 204 billion addresses per joule</strong>.</p>
+</blockquote>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Decoder Implementation</th><th>Energy per Decoded Address</th><th>Full 2,273-Address Catalog Cost</th><th>Addresses Decoded per Joule</th><th>Power at 50 GB/s Line Rate (12.5B addr/s)</th><th>Evidence Tier</th></tr></thead><tbody><tr><td><strong>General-Purpose Software (3 W core)</strong></td><td><code dir="auto">26.0 nJ / addr</code></td><td><code dir="auto">59.1 µJ</code></td><td><strong>38.5 Million / J</strong></td><td>—</td><td>Measured timing × power</td></tr><tr><td><strong>General-Purpose Software (1 W core)</strong></td><td><code dir="auto">8.67 nJ / addr</code></td><td><code dir="auto">19.7 µJ</code></td><td><strong>115.3 Million / J</strong></td><td>—</td><td>Measured timing × power</td></tr><tr><td><strong>7 nm Silicon Decoder (Conservative)</strong></td><td><code dir="auto">32.9 pJ / addr</code></td><td><code dir="auto">74.8 nJ</code></td><td><strong>30.4 Billion / J</strong></td><td><strong>0.375 W</strong></td><td>Modeled (7 nm CMOS)</td></tr><tr><td><strong>7 nm Silicon Decoder (Optimistic)</strong></td><td><code dir="auto">4.9 pJ / addr</code></td><td><code dir="auto">11.1 nJ</code></td><td><strong>204.1 Billion / J</strong></td><td><strong>0.025 W</strong></td><td>Modeled (7 nm CMOS)</td></tr></tbody></table>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="4-compounding-hop--byte-energy-cuts">4. Compounding Hop × Byte Energy Cuts</h2><a class="sl-anchor-link" href="#4-compounding-hop--byte-energy-cuts"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “4. Compounding Hop × Byte Energy Cuts”</span></a></div>
+<blockquote>
+<p><strong>One-Liner:</strong> When you shrink catalog bytes by <strong>61.0%</strong> (<code dir="auto">c_b = 0.6097</code>) and simultaneously cut memory hops (<code dir="auto">c_h</code>), total movement energy drops multiplicatively: $c_E = 1 - (1 - c_h)(1 - c_b)$.</p>
+</blockquote>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Hop Reduction ($c_h$)</th><th>Hops Kept ($1 - c_h$)</th><th>Bytes Kept ($1 - c_b$)</th><th>Relative Movement Energy</th><th>Total Movement Energy Reduction ($c_E$)</th></tr></thead><tbody><tr><td><strong>0% (Same Path)</strong></td><td><code dir="auto">100%</code></td><td><code dir="auto">39.03%</code></td><td><code dir="auto">39.03%</code></td><td><strong>61.0% Energy Cut</strong></td></tr><tr><td><strong>25% Fewer Hops</strong></td><td><code dir="auto">75%</code></td><td><code dir="auto">39.03%</code></td><td><code dir="auto">29.27%</code></td><td><strong>70.7% Energy Cut</strong></td></tr><tr><td><strong>50% Fewer Hops (Half Hops)</strong></td><td><code dir="auto">50%</code></td><td><code dir="auto">39.03%</code></td><td><code dir="auto">19.52%</code></td><td><strong>80.5% Energy Cut</strong></td></tr><tr><td><strong>75% Fewer Hops</strong></td><td><code dir="auto">25%</code></td><td><code dir="auto">39.03%</code></td><td><code dir="auto">9.76%</code></td><td><strong>90.2% Energy Cut</strong></td></tr><tr><td><strong>90% Fewer Hops (Direct Lattice)</strong></td><td><code dir="auto">10%</code></td><td><code dir="auto">39.03%</code></td><td><code dir="auto">3.90%</code></td><td><strong>96.1% Energy Cut</strong></td></tr></tbody></table>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="5-ai-decision-economics-the-864-joule-decision--211-multiplier">5. AI Decision Economics: The 864-Joule Decision &#x26; 211× Multiplier</h2><a class="sl-anchor-link" href="#5-ai-decision-economics-the-864-joule-decision--211-multiplier"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “5. AI Decision Economics: The 864-Joule Decision &#x26; 211× Multiplier”</span></a></div>
+<blockquote>
+<p><strong>One-Liner:</strong> A median AI decision consumes <strong>864 Joules (0.24 Wh)</strong>, but <strong>99.2% of its dollar cost is GPU accelerator time</strong> — making every joule saved on memory waiting worth <strong>211× the price of the raw electricity</strong>.</p>
+</blockquote>
+<div class="sl-heading-wrapper level-h3"><h3 id="anatomy-of-a-median-ai-decision-864-joules--024-wh">Anatomy of a Median AI Decision (864 Joules = 0.24 Wh)</h3><a class="sl-anchor-link" href="#anatomy-of-a-median-ai-decision-864-joules--024-wh"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Anatomy of a Median AI Decision (864 Joules = 0.24 Wh)”</span></a></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Subsystem on an 8-GPU Inference Node</th><th>Energy per Decision</th><th>Share of Total Decision Energy</th><th>Dollar Cost Component</th></tr></thead><tbody><tr><td><strong>AI Accelerators (8× GPU Tensor + HBM)</strong></td><td><strong>504 J</strong> (<code dir="auto">0.14 Wh</code>)</td><td><strong>58.3%</strong></td><td>Dominates capital &#x26; cloud rental cost</td></tr><tr><td><strong>Host CPU + System DRAM</strong></td><td><strong>216 J</strong> (<code dir="auto">0.06 Wh</code>)</td><td><strong>25.0%</strong></td><td>Context assembly, index lookup &#x26; host memory</td></tr><tr><td><strong>Idle + Cooling + Provisioned Overhead</strong></td><td><strong>144 J</strong> (<code dir="auto">0.04 Wh</code>)</td><td><strong>16.7%</strong></td><td>Reserve capacity &#x26; facility PUE load</td></tr><tr><td><strong>Total per Median AI Decision</strong></td><td><strong>864 J</strong> (<code dir="auto">0.24 Wh</code>)</td><td><strong>100.0%</strong></td><td><strong>$0.00252 total cost per decision</strong></td></tr></tbody></table>
+<div class="sl-heading-wrapper level-h3"><h3 id="why-1-saved-joule-is-worth-211-its-electricity-cost">Why 1 Saved Joule Is Worth 211× Its Electricity Cost</h3><a class="sl-anchor-link" href="#why-1-saved-joule-is-worth-211-its-electricity-cost"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Why 1 Saved Joule Is Worth 211× Its Electricity Cost”</span></a></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Economic Metric</th><th>Value per Joule</th><th>Value per 864 J Decision</th><th>Share</th></tr></thead><tbody><tr><td><strong>Raw Electricity Cost</strong> (<code dir="auto">$0.085 / kWh</code>)</td><td><code dir="auto">$2.36 × 10⁻⁸ / J</code></td><td><code dir="auto">$0.0000204 / decision</code></td><td><strong>0.8%</strong></td></tr><tr><td><strong>Occupied Accelerator Compute Time</strong></td><td><code dir="auto">$4.98 × 10⁻⁶ / J</code> <em>(of GPU energy)</em></td><td><code dir="auto">$0.00250 / decision</code></td><td><strong>99.2%</strong></td></tr><tr><td><strong>Accelerator-to-Electricity Multiplier</strong></td><td><strong>211×</strong></td><td><strong>211×</strong></td><td><strong>Every saved GPU joule frees 211× its power cost</strong></td></tr></tbody></table>
+<div class="sl-heading-wrapper level-h3"><h3 id="annual-savings-per-1-trillion-ai-decisions-805-compounding-hop--byte-cut">Annual Savings per 1 Trillion AI Decisions (<code dir="auto">80.5%</code> Compounding Hop × Byte Cut)</h3><a class="sl-anchor-link" href="#annual-savings-per-1-trillion-ai-decisions-805-compounding-hop--byte-cut"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Annual Savings per 1 Trillion AI Decisions (80.5% Compounding Hop × Byte Cut)”</span></a></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Index / Address Movement Share of Decision</th><th>Joules Saved per Decision</th><th>Extra Decisions Enabled (per 1T Baseline)</th><th>Electricity Saved / Year</th><th>Accelerator Capacity Value Freed / Year</th></tr></thead><tbody><tr><td><strong>1% of Decision Energy</strong></td><td><strong>4.74 J</strong></td><td><code dir="auto">+5.5 Billion decisions</code></td><td><code dir="auto">$112,000 / yr</code></td><td><strong>$13.7 Million / yr</strong></td></tr><tr><td><strong>2% of Decision Energy</strong></td><td><strong>9.48 J</strong></td><td><code dir="auto">+11.1 Billion decisions</code></td><td><code dir="auto">$224,000 / yr</code></td><td><strong>$27.4 Million / yr</strong></td></tr><tr><td><strong>5% of Decision Energy</strong></td><td><strong>23.70 J</strong></td><td><code dir="auto">+28.2 Billion decisions</code></td><td><code dir="auto">$560,000 / yr</code></td><td><strong>$68.6 Million / yr</strong></td></tr></tbody></table>
+<hr>
+<div class="sl-heading-wrapper level-h2"><h2 id="6-the-complete-per-joule-scorecard-measured-vs-modeled">6. The Complete Per-Joule Scorecard (Measured vs. Modeled)</h2><a class="sl-anchor-link" href="#6-the-complete-per-joule-scorecard-measured-vs-modeled"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “6. The Complete Per-Joule Scorecard (Measured vs. Modeled)”</span></a></div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Quantity</th><th>Value</th><th>Plain-English Meaning</th><th>Evidence Tier</th></tr></thead><tbody><tr><td><strong>Catalog Compression</strong></td><td><strong>60.97% fewer bytes</strong> (<code dir="auto">2.562×</code>)</td><td><code dir="auto">3,549 B</code> vs. <code dir="auto">9,092 B</code> raw for <code dir="auto">2,273</code> exact E8 addresses (<code dir="auto">12.49 bits/addr</code>)</td><td><strong>Measured</strong></td></tr><tr><td><strong>Native Decode Latency</strong></td><td><strong>19.7 µs</strong> (<code dir="auto">8.67 ns/addr</code>)</td><td>Full <code dir="auto">2,273</code>-address table reconstructed with zero loss in native Rust</td><td><strong>Measured</strong></td></tr><tr><td><strong>Decoder Operation Count</strong></td><td><strong>27.05 ops / address</strong></td><td>Shifts, range masks, and integer adds (<code dir="auto">61,485</code> ops/table · <code dir="auto">0</code> multipliers)</td><td><strong>Measured</strong></td></tr><tr><td><strong>Software Decode Efficiency</strong></td><td><strong>38M – 115M addr / J</strong></td><td>At <code dir="auto">1–3 W</code> core power (<code dir="auto">8.67–26.0 nJ/addr</code>)</td><td><strong>Modeled</strong></td></tr><tr><td><strong>7 nm Silicon Decode Efficiency</strong></td><td><strong>30B – 204B addr / J</strong></td><td>Fixed-function hardware at <code dir="auto">4.9–32.9 pJ/addr</code> (<code dir="auto">0.025–0.375 W</code> @ <code dir="auto">50 GB/s</code>)</td><td><strong>Modeled</strong></td></tr><tr><td><strong>Single WAN Transfer Win</strong></td><td><strong>1.20 J saved</strong> (<code dir="auto">20,000×</code>)</td><td>One internet catalog transfer saves <code dir="auto">20,000×</code> its software decode energy (<code dir="auto">99.995%</code> kept)</td><td><strong>Modeled</strong></td></tr><tr><td><strong>Compounding Hop × Byte Cut</strong></td><td><strong>61.0% → 96.1% cut</strong></td><td><code dir="auto">61.0%</code> (same hops) · <code dir="auto">80.5%</code> (<code dir="auto">50%</code> fewer hops) · <code dir="auto">96.1%</code> (<code dir="auto">90%</code> fewer hops)</td><td><strong>Modeled</strong></td></tr><tr><td><strong>Joule Economic Multiplier</strong></td><td><strong>211× electricity cost</strong></td><td>Freed GPU time (<code dir="auto">$0.00250</code>) dwarfs raw electricity (<code dir="auto">$0.0000204</code>) on an <code dir="auto">864 J</code> decision</td><td><strong>Modeled</strong></td></tr><tr><td><strong>2030 Global Fleet Potential</strong></td><td><strong>2,333 GWh &#x26; 0.81 Mt CO₂</strong></td><td>Annual global savings at a <code dir="auto">5%</code> share of active data-center DRAM traffic in 2030</td><td><strong>Modeled</strong></td></tr></tbody></table> </div> <footer class="sl-flex astro-3yyafb3n"> <div class="meta sl-flex astro-3yyafb3n">   </div> <div class="pagination-links print:hidden astro-u2l5gyhi" dir="ltr"> <a href="/docs/benchmarks/performance-benchmarks/" rel="prev" class="astro-u2l5gyhi"> <svg aria-hidden="true" class="astro-u2l5gyhi astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg> <span class="astro-u2l5gyhi"> Previous <br class="astro-u2l5gyhi"> <span class="link-title astro-u2l5gyhi">Performance Benchmarks</span> </span> </a> <a href="/docs/benchmarks/industry-context/" rel="next" class="astro-u2l5gyhi"> <svg aria-hidden="true" class="astro-u2l5gyhi astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg> <span class="astro-u2l5gyhi"> Next <br class="astro-u2l5gyhi"> <span class="link-title astro-u2l5gyhi">Industry Context</span> </span> </a> </div>   </footer>  </div> </div>   </main> </div> </div>  </div> </div>  </body></html>
