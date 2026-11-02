@@ -1,12 +1,39 @@
-# NEOMORPHIC™ (neomorphic.si) — Hostinger LiteSpeed / Apache configuration
+# NEOMORPHIC™ (neomorphic.si) — Hostinger LiteSpeed / Apache / Trinity configuration
+Options -Indexes
 RewriteEngine On
 
-# Force HTTPS
+# Block access to hidden files and directories (.git, .DS_Store, .htaccess, .nojekyll, etc.)
+RewriteRule ^(?:.*/)?\. - [F,L]
+
+# Hide internal development styleguide in production
+RewriteRule ^styleguide(?:/.*)?$ - [R=404,L]
+
+# Force HTTPS and canonical apex domain (www.neomorphic.si -> neomorphic.si)
+RewriteCond %{HTTP_HOST} ^www\.neomorphic\.si$ [NC,OR]
 RewriteCond %{HTTPS} !=on
-RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+RewriteCond %{HTTP_HOST} ^(?:www\.)?(.+)$ [NC]
+RewriteRule ^ https://%1%{REQUEST_URI} [L,R=301]
 
 # Custom 404 page
 ErrorDocument 404 /404.html
+
+# Security Headers
+<IfModule mod_headers.c>
+  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "DENY"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+  Header always set Cross-Origin-Opener-Policy "same-origin"
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests"
+  Header always unset X-Powered-By
+  Header unset X-Powered-By
+
+  # Prevent search indexing of protected docs, media, and search index
+  <If "%{REQUEST_URI} =~ m#^/(docs|docs-media|pagefind)(/|$)#">
+    Header always set X-Robots-Tag "noindex, nofollow, noarchive"
+  </If>
+</IfModule>
 
 # Correct MIME types for video/audio/webp/woff2
 <IfModule mod_mime.c>
