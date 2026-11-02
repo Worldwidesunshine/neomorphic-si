@@ -112,11 +112,15 @@
 		font-size: 0.95rem;
 		font-weight: 600;
 		cursor: pointer;
-		transition: transform 0.15s ease, box-shadow 0.2s ease;
+		transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 	}
-	.neo-gate__btn:hover {
+	.neo-gate__btn:hover:not(:disabled) {
 		box-shadow: 0 0 28px rgba(168, 216, 248, 0.45);
 		transform: translateY(-1px);
+	}
+	.neo-gate__btn:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
 	}
 	.neo-gate__error {
 		font-family: 'Avenir Next', 'Inter Variable', 'Inter', sans-serif;
@@ -173,28 +177,110 @@
 		};
 	})();
 
-	// Sovereign Documentation Access Gate (Salted SHA-256 verification)
+	// Sovereign Documentation Access Gate (PBKDF2-HMAC-SHA256 310,000 iterations + AES-256-GCM payload decryption)
 	(() => {
-		const STORAGE_KEY = 'neo_docs_auth_v1';
-		const EXPECTED_HASH = 'da43f9f15396ade683ccd8011b271bbaae599b9554c48418d58601c2eca2403f';
-		const SALT = ':neomorphic-ssii-2026';
+		const KEY_STORAGE = 'neo_docs_key_v2';
+		const FAILS_STORAGE = 'neo_docs_fails_v2';
+		const LOCK_STORAGE = 'neo_docs_lock_until_v2';
+		const PBKDF2_SALT = 'neomorphic-ssii-2026-pbkdf2-v2';
+		const PBKDF2_ITERS = 310000;
+		// SHA-256(PBKDF2-derived 256-bit key) — one-way verifier; cannot decrypt AES-256-GCM payload without password
+		const EXPECTED_VERIFIER = 'ed2016881993578201b591676b960ab6c50cd92c6c07a92e22782eedbef7e838';
 
-		try {
-			if (sessionStorage.getItem(STORAGE_KEY) === EXPECTED_HASH) {
-				document.documentElement.setAttribute('data-neo-unlocked', 'true');
-				return;
+		function bytesToHex(bytes) {
+			return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+		}
+
+		function hexToBytes(hex) {
+			const out = new Uint8Array(hex.length / 2);
+			for (let i = 0; i < out.length; i++) {
+				out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
 			}
-		} catch {}
+			return out;
+		}
 
-		async function sha256Hex(str) {
-			const buf = new TextEncoder().encode(str);
-			const digest = await crypto.subtle.digest('SHA-256', buf);
-			return Array.from(new Uint8Array(digest))
-				.map((b) => b.toString(16).padStart(2, '0'))
-				.join('');
+		function b64ToBytes(b64) {
+			const bin = atob(b64);
+			const out = new Uint8Array(bin.length);
+			for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+			return out;
+		}
+
+		async function deriveKeyBytes(password) {
+			const enc = new TextEncoder();
+			const baseKey = await crypto.subtle.importKey(
+				'raw',
+				enc.encode(password),
+				'PBKDF2',
+				false,
+				['deriveBits']
+			);
+			const bits = await crypto.subtle.deriveBits(
+				{
+					name: 'PBKDF2',
+					salt: enc.encode(PBKDF2_SALT),
+					iterations: PBKDF2_ITERS,
+					hash: 'SHA-256',
+				},
+				baseKey,
+				256
+			);
+			return new Uint8Array(bits);
+		}
+
+		async function sha256HexBytes(bytes) {
+			const digest = await crypto.subtle.digest('SHA-256', bytes);
+			return bytesToHex(new Uint8Array(digest));
+		}
+
+		async function decryptAndMount(keyBytes) {
+			const payloadEl = document.getElementById('neo-encrypted-main');
+			if (payloadEl) {
+				const data = JSON.parse(payloadEl.textContent || '{}');
+				const aesKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+				const plainBuf = await crypto.subtle.decrypt(
+					{ name: 'AES-GCM', iv: b64ToBytes(data.iv) },
+					aesKey,
+					b64ToBytes(data.ct)
+				);
+				const html = new TextDecoder().decode(plainBuf);
+				const mainEl = payloadEl.closest('main') || document.querySelector('main');
+				if (mainEl) {
+					mainEl.innerHTML = html;
+					mainEl.querySelectorAll('video, audio').forEach((media) => {
+						media.addEventListener('contextmenu', (e) => e.preventDefault());
+					});
+				}
+			}
+			document.documentElement.setAttribute('data-neo-unlocked', 'true');
+			const gate = document.getElementById('neo-auth-gate');
+			if (gate) gate.remove();
+		}
+
+		async function tryAutoUnlock() {
+			try {
+				const savedHex = sessionStorage.getItem(KEY_STORAGE);
+				if (!savedHex || savedHex.length !== 64) return false;
+				const keyBytes = hexToBytes(savedHex);
+				const verifier = await sha256HexBytes(keyBytes);
+				if (verifier !== EXPECTED_VERIFIER) {
+					sessionStorage.removeItem(KEY_STORAGE);
+					return false;
+				}
+				const run = () => decryptAndMount(keyBytes).catch(() => sessionStorage.removeItem(KEY_STORAGE));
+				if (document.readyState === 'loading') {
+					document.addEventListener('DOMContentLoaded', run, { once: true });
+				} else {
+					await run();
+				}
+				return true;
+			} catch {
+				return false;
+			}
 		}
 
 		function mountGate() {
+			if (document.documentElement.getAttribute('data-neo-unlocked') === 'true') return;
 			if (document.getElementById('neo-auth-gate')) return;
 			const gate = document.createElement('div');
 			gate.id = 'neo-auth-gate';
@@ -209,7 +295,7 @@
 					</div>
 					<h1 class="neo-gate__title" id="neo-gate-title">Enter Access Password</h1>
 					<p class="neo-gate__desc">
-						Technical architecture, verified benchmarks, and sovereign briefing materials require authorized access.
+						Technical architecture, verified benchmarks, and sovereign briefing materials are encrypted with AES-256-GCM and require authorized access.
 					</p>
 					<form class="neo-gate__form" id="neo-gate-form" autocomplete="off">
 						<div class="neo-gate__input-wrap">
@@ -223,11 +309,11 @@
 								aria-label="Documentation password"
 							/>
 						</div>
-						<button type="submit" class="neo-gate__btn">Unlock Documentation</button>
+						<button type="submit" id="neo-gate-submit" class="neo-gate__btn">Unlock Documentation</button>
 						<p class="neo-gate__error" id="neo-gate-error" role="alert" aria-live="polite"></p>
 					</form>
 					<div class="neo-gate__footer">
-						<span>SSII Architecture</span>
+						<span>SSII Architecture · AES-256-GCM</span>
 						<a href="/" class="neo-gate__back">← Return to neomorphic.si</a>
 					</div>
 				</div>
@@ -236,54 +322,88 @@
 
 			const form = document.getElementById('neo-gate-form');
 			const input = document.getElementById('neo-gate-input');
+			const submitBtn = document.getElementById('neo-gate-submit');
 			const errorEl = document.getElementById('neo-gate-error');
 			setTimeout(() => input && input.focus(), 50);
 
+			function checkLockout() {
+				try {
+					const until = Number(sessionStorage.getItem(LOCK_STORAGE) || '0');
+					const rem = Math.ceil((until - Date.now()) / 1000);
+					if (rem > 0) {
+						submitBtn.disabled = true;
+						input.disabled = true;
+						errorEl.textContent = `Too many failed attempts. Please wait ${rem}s before retrying.`;
+						setTimeout(checkLockout, 1000);
+						return true;
+					} else if (submitBtn.disabled) {
+						submitBtn.disabled = false;
+						input.disabled = false;
+						errorEl.textContent = '';
+						input.focus();
+					}
+				} catch {}
+				return false;
+			}
+			checkLockout();
+
 			form.addEventListener('submit', async (e) => {
 				e.preventDefault();
+				if (checkLockout()) return;
 				const raw = (input.value || '').trim().toLowerCase();
 				if (!raw) return;
-				const hash = await sha256Hex(raw + SALT);
-				if (hash === EXPECTED_HASH) {
-					try { sessionStorage.setItem(STORAGE_KEY, EXPECTED_HASH); } catch {}
-					document.documentElement.setAttribute('data-neo-unlocked', 'true');
-					gate.remove();
-				} else {
-					errorEl.textContent = 'Invalid access password. Please try again.';
-					input.value = '';
-					input.focus();
+				submitBtn.disabled = true;
+				try {
+					const keyBytes = await deriveKeyBytes(raw);
+					const verifier = await sha256HexBytes(keyBytes);
+					if (verifier === EXPECTED_VERIFIER) {
+						try {
+							sessionStorage.setItem(KEY_STORAGE, bytesToHex(keyBytes));
+							sessionStorage.removeItem(FAILS_STORAGE);
+							sessionStorage.removeItem(LOCK_STORAGE);
+						} catch {}
+						await decryptAndMount(keyBytes);
+					} else {
+						let fails = 1;
+						try {
+							fails = Number(sessionStorage.getItem(FAILS_STORAGE) || '0') + 1;
+							sessionStorage.setItem(FAILS_STORAGE, String(fails));
+							if (fails >= 3) {
+								const delaySec = Math.min(60, 5 * Math.pow(2, fails - 3));
+								sessionStorage.setItem(LOCK_STORAGE, String(Date.now() + delaySec * 1000));
+							}
+						} catch {}
+						submitBtn.disabled = false;
+						if (!checkLockout()) {
+							errorEl.textContent = 'Invalid access password. Please try again.';
+							input.value = '';
+							input.focus();
+						}
+					}
+				} catch {
+					submitBtn.disabled = false;
+					errorEl.textContent = 'Unable to verify credentials. Please try again.';
 				}
 			});
 		}
 
-		if (document.body) {
-			mountGate();
-		} else {
-			document.addEventListener('DOMContentLoaded', mountGate);
-		}
+		tryAutoUnlock().then((unlocked) => {
+			if (!unlocked) {
+				if (document.body) mountGate();
+				else document.addEventListener('DOMContentLoaded', mountGate, { once: true });
+			}
+		});
 	})();
 </script><template id="theme-icons"><svg aria-hidden="true" class="light astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/_astro/print.DNXP8c50.css" media="print"><style>@font-face{font-family:LT Institute;src:url(/fonts/LTInstitute-1.otf) format("opentype");font-weight:100 900;font-style:normal;font-display:swap}:root{--bg-lavender: #f1eef8;--bg-mist: #e7e2f3;--bg-veil: rgba(255, 255, 255, .55);--ink: #0c0b14;--ink-2: #15131f;--ink-3: #1e1b2c;--white: #ffffff;--pastel-blue: #a8d8f8;--pastel-purple: #c9b8f6;--periwinkle: #8e9cff;--signal-mint: #9ef0d8;--mint: #9ef0d8;--text: #16141f;--text-muted: #5b566e;--text-on-ink: #eceaf5;--text-on-ink-muted: #a29fb8;--line: rgba(22, 20, 31, .1);--line-on-ink: rgba(201, 184, 246, .18);--glow-blue: 0 0 24px rgba(168, 216, 248, .45);--glow-purple: 0 0 24px rgba(201, 184, 246, .45);--aurora: radial-gradient(60% 50% at 20% 20%, rgba(168, 216, 248, .55), transparent 70%), radial-gradient(50% 45% at 80% 30%, rgba(201, 184, 246, .6), transparent 70%), radial-gradient(60% 60% at 50% 100%, rgba(142, 156, 255, .25), transparent 70%);--ink-panel: linear-gradient(160deg, #15131f 0%, #0c0b14 60%, #121025 100%);--font-display: "LT Institute", "Avenir Next", "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;--font-body: "LT Institute", "Avenir Next", "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;--font-sans: "LT Institute", "Avenir Next", "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;--font-mono: "LT Institute", "Avenir Next", "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;--font-code: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;--fs-xs: clamp(.75rem, .72rem + .1vw, .8rem);--fs-sm: clamp(.875rem, .85rem + .1vw, .95rem);--fs-md: clamp(1rem, .97rem + .15vw, 1.1rem);--fs-lg: clamp(1.25rem, 1.1rem + .6vw, 1.6rem);--fs-xl: clamp(1.75rem, 1.4rem + 1.5vw, 2.75rem);--fs-2xl: clamp(2.5rem, 1.8rem + 3vw, 4.75rem);--space-1: .25rem;--space-2: .5rem;--space-3: 1rem;--space-4: 1.5rem;--space-5: 2.5rem;--space-6: 4rem;--space-7: 6rem;--space-8: 9rem;--radius-sm: 8px;--radius-md: 14px;--radius-lg: 24px;--container: 1240px;--ease-out: cubic-bezier(.16, 1, .3, 1);--nav-h: 64px;--nav-top: 14px;--grid-line: rgba(22, 20, 31, .055);--grid-line-on-ink: rgba(201, 184, 246, .07);--grid-size: 48px;--tick-color: rgba(22, 20, 31, .38);--tick-color-on-ink: rgba(201, 184, 246, .55);--text-accent: #5a4fcf;--shadow-soft: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 20px 50px -24px rgba(44, 36, 112, .25);--shadow-ink: 0 30px 80px -30px rgba(12, 11, 20, .6)}
 </style>
-<link rel="stylesheet" href="/_astro/index.CoYKx0xL.css">
+<link rel="stylesheet" href="/_astro/index.D9pM1j2i.css">
 <style>@layer starlight.components{:root{--sl-badge-default-border: var(--sl-color-accent);--sl-badge-default-bg: var(--sl-color-accent-low);--sl-badge-default-text: #fff;--sl-badge-note-border: var(--sl-color-blue);--sl-badge-note-bg: var(--sl-color-blue-low);--sl-badge-note-text: #fff;--sl-badge-danger-border: var(--sl-color-red);--sl-badge-danger-bg: var(--sl-color-red-low);--sl-badge-danger-text: #fff;--sl-badge-success-border: var(--sl-color-green);--sl-badge-success-bg: var(--sl-color-green-low);--sl-badge-success-text: #fff;--sl-badge-caution-border: var(--sl-color-orange);--sl-badge-caution-bg: var(--sl-color-orange-low);--sl-badge-caution-text: #fff;--sl-badge-tip-border: var(--sl-color-purple);--sl-badge-tip-bg: var(--sl-color-purple-low);--sl-badge-tip-text: #fff}[data-theme=light]:root{--sl-badge-default-bg: var(--sl-color-accent-high);--sl-badge-note-bg: var(--sl-color-blue-high);--sl-badge-danger-bg: var(--sl-color-red-high);--sl-badge-success-bg: var(--sl-color-green-high);--sl-badge-caution-bg: var(--sl-color-orange-high);--sl-badge-tip-bg: var(--sl-color-purple-high)}.sl-badge:where(.astro-avdet4wd){display:inline-block;border:1px solid var(--sl-color-border-badge);border-radius:.25rem;font-family:var(--sl-font-system-mono);line-height:normal;color:var(--sl-color-text-badge);background-color:var(--sl-color-bg-badge);overflow-wrap:anywhere}.sidebar-content .sl-badge:where(.astro-avdet4wd){line-height:1;font-size:var(--sl-text-xs);padding:.125rem .375rem}.sidebar-content a[aria-current=page]>.sl-badge:where(.astro-avdet4wd){--sl-color-bg-badge: transparent;--sl-color-border-badge: currentColor;color:inherit}.default:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-default-bg);--sl-color-border-badge: var(--sl-badge-default-border);--sl-color-text-badge: var(--sl-badge-default-text)}.note:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-note-bg);--sl-color-border-badge: var(--sl-badge-note-border);--sl-color-text-badge: var(--sl-badge-note-text)}.danger:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-danger-bg);--sl-color-border-badge: var(--sl-badge-danger-border);--sl-color-text-badge: var(--sl-badge-danger-text)}.success:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-success-bg);--sl-color-border-badge: var(--sl-badge-success-border);--sl-color-text-badge: var(--sl-badge-success-text)}.tip:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-tip-bg);--sl-color-border-badge: var(--sl-badge-tip-border);--sl-color-text-badge: var(--sl-badge-tip-text)}.caution:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-caution-bg);--sl-color-border-badge: var(--sl-badge-caution-border);--sl-color-text-badge: var(--sl-badge-caution-text)}.small:where(.astro-avdet4wd){font-size:var(--sl-text-xs);padding:.125rem .25rem}.medium:where(.astro-avdet4wd){font-size:var(--sl-text-sm);padding:.175rem .35rem}.large:where(.astro-avdet4wd){font-size:var(--sl-text-base);padding:.225rem .45rem}.sl-markdown-content :is(h1,h2,h3,h4,h5,h6) .sl-badge:where(.astro-avdet4wd){vertical-align:middle}}
 @layer starlight.components{.card-grid:where(.astro-zntqmydn){display:grid;grid-template-columns:100%;gap:1rem}.card-grid:where(.astro-zntqmydn)>*{margin-top:0!important}@media(min-width:50rem){.card-grid:where(.astro-zntqmydn){grid-template-columns:1fr 1fr;gap:1.5rem}.stagger:where(.astro-zntqmydn){--stagger-height: 5rem;padding-bottom:var(--stagger-height)}.stagger:where(.astro-zntqmydn)>*:nth-child(2n){transform:translateY(var(--stagger-height))}}}
 @layer starlight.components{svg:where(.astro-c6vsoqas){color:var(--sl-icon-color);font-size:var(--sl-icon-size, 1em);width:1em;height:1em}}
 @layer starlight.components{.sl-link-card:where(.astro-mf7fz2mj){display:grid;grid-template-columns:1fr auto;gap:.5rem;border:1px solid var(--sl-color-gray-5);border-radius:.5rem;padding:1rem;box-shadow:var(--sl-shadow-sm);position:relative}a:where(.astro-mf7fz2mj){text-decoration:none;line-height:var(--sl-line-height-headings)}a:where(.astro-mf7fz2mj):before{content:"";position:absolute;inset:0}.stack:where(.astro-mf7fz2mj){flex-direction:column;gap:.5rem}.title:where(.astro-mf7fz2mj){color:var(--sl-color-white);font-weight:600;font-size:var(--sl-text-lg)}.description:where(.astro-mf7fz2mj){color:var(--sl-color-gray-3);line-height:1.5}.icon:where(.astro-mf7fz2mj){color:var(--sl-color-gray-3)}.sl-link-card:where(.astro-mf7fz2mj):hover{background:var(--sl-color-gray-7, var(--sl-color-gray-6));border-color:var(--sl-color-gray-2)}.sl-link-card:where(.astro-mf7fz2mj):hover .icon:where(.astro-mf7fz2mj){color:var(--sl-color-white)}}
 @layer starlight.components{.sl-steps{--bullet-size: calc(var(--sl-line-height) * 1rem);--bullet-margin: .375rem;list-style:none;counter-reset:steps-counter var(--sl-steps-start, 0);padding-inline-start:0}.sl-steps>li{counter-increment:steps-counter;position:relative;padding-inline-start:calc(var(--bullet-size) + 1rem);padding-bottom:1px;min-height:calc(var(--bullet-size) + var(--bullet-margin))}.sl-steps>li+li{margin-top:0}.sl-steps>li:before{content:counter(steps-counter);position:absolute;top:0;inset-inline-start:0;width:var(--bullet-size);height:var(--bullet-size);line-height:var(--bullet-size);font-size:var(--sl-text-xs);font-weight:600;text-align:center;color:var(--sl-color-white);background-color:var(--sl-color-gray-6);border-radius:99rem;box-shadow:inset 0 0 0 1px var(--sl-color-gray-5)}.sl-steps>li:after{--guide-width: 1px;content:"";position:absolute;top:calc(var(--bullet-size) + var(--bullet-margin));bottom:var(--bullet-margin);inset-inline-start:calc((var(--bullet-size) - var(--guide-width)) / 2);width:var(--guide-width);background-color:var(--sl-color-hairline-light)}}@layer starlight.content{.sl-steps>li>:first-child{--lh: calc(1em * var(--sl-line-height));--shift-y: calc(.5 * (var(--bullet-size) - var(--lh)));transform:translateY(var(--shift-y));margin-bottom:var(--shift-y)}.sl-steps>li>:first-child:where(h1,h2,h3,h4,h5,h6){--lh: calc(1em * var(--sl-line-height-headings))}@supports (--prop: 1lh){.sl-steps>li>:first-child{--lh: 1lh}}}
 @layer starlight.components{.sl-link-button:where(.astro-xwgiixxa){align-items:center;border:1px solid transparent;border-radius:999rem;display:inline-flex;font-size:var(--sl-text-sm);gap:.5em;line-height:1.1875;outline-offset:.25rem;padding:.4375rem 1.125rem;text-decoration:none}.sl-link-button:where(.astro-xwgiixxa).primary{background:var(--sl-color-text-accent);border-color:var(--sl-color-text-accent);color:var(--sl-color-black)}.sl-link-button:where(.astro-xwgiixxa).primary:hover{color:var(--sl-color-black)}.sl-link-button:where(.astro-xwgiixxa).secondary{border-color:inherit;color:var(--sl-color-white)}.sl-link-button:where(.astro-xwgiixxa).minimal{color:var(--sl-color-white);padding-inline:0}.sl-link-button:where(.astro-xwgiixxa) svg{flex-shrink:0}@media(min-width:50rem){.sl-link-button:where(.astro-xwgiixxa){font-size:var(--sl-text-base);padding:.9375rem 1.25rem}}.sl-markdown-content .sl-link-button:where(.astro-xwgiixxa){margin-inline-end:1rem}.sl-markdown-content .sl-link-button:where(.astro-xwgiixxa):not(:where(p *)){margin-block:1rem}}
-</style><script type="module" src="/_astro/page.B1D-nYk3.js"></script></head> <body class="astro-bguv2lll"> <a href="#_top" class="astro-7q3lir66">Skip to content</a>  <div class="page sl-flex astro-vrdttmbt"> <header class="header astro-vrdttmbt"><div class="header astro-kmkmnagf"> <div class="title-wrapper sl-flex astro-kmkmnagf"> <a href="/" class="site-title sl-flex astro-m46x6ez3">  <span class="astro-m46x6ez3" translate="no"> NEOMORPHIC™ Docs </span> </a>  </div> <div class="sl-flex print:hidden astro-kmkmnagf"> <site-search class="astro-kmkmnagf astro-v37mnknz" data-translations="{&#34;placeholder&#34;:&#34;Search&#34;}"> <button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-v37mnknz"> <svg aria-hidden="true" class="astro-v37mnknz astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg> <span class="sl-hidden md:sl-block astro-v37mnknz" aria-hidden="true">Search</span> <kbd class="sl-hidden md:sl-flex astro-v37mnknz" style="display: none;"> <kbd class="astro-v37mnknz">Ctrl</kbd><kbd class="astro-v37mnknz">K</kbd> </kbd> </button> <dialog style="padding:0" aria-label="Search" class="astro-v37mnknz"> <div class="dialog-frame sl-flex astro-v37mnknz">  <button data-close-modal class="sl-flex md:sl-hidden astro-v37mnknz"> Cancel </button> <div class="search-container astro-v37mnknz"> <div id="starlight__search" class="astro-v37mnknz"></div> </div> </div> </dialog> </site-search>  <script>
-	(() => {
-		const openBtn = document.querySelector('button[data-open-modal]');
-		const shortcut = openBtn?.querySelector('kbd');
-		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
-		const platformKey = shortcut.querySelector('kbd');
-		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
-			platformKey.textContent = '⌘';
-			openBtn.setAttribute('aria-keyshortcuts', 'Meta+K');
-		}
-		shortcut.style.display = '';
-	})();
-</script> <script type="module" src="/_astro/Search.astro_astro_type_script_index_0_lang.CJiOmi4V.js"></script>   </div> <div class="sl-hidden md:sl-flex print:hidden right-group astro-kmkmnagf"> <div class="sl-flex social-icons astro-kmkmnagf">  </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-4yphtoen"> <span class="sr-only astro-4yphtoen">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select autocomplete="off" class="astro-4yphtoen"> <option value="dark" class="astro-4yphtoen">Dark</option><option value="light" class="astro-4yphtoen">Light</option><option value="auto" selected class="astro-4yphtoen">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label>  </starlight-theme-select>  <script>
+</style><script type="module" src="/_astro/page.B1D-nYk3.js"></script></head> <body class="astro-bguv2lll"> <a href="#_top" class="astro-7q3lir66">Skip to content</a>  <div class="page sl-flex astro-vrdttmbt"> <header class="header astro-vrdttmbt"><div class="header astro-kmkmnagf"> <div class="title-wrapper sl-flex astro-kmkmnagf"> <a href="/" class="site-title sl-flex astro-m46x6ez3">  <span class="astro-m46x6ez3" translate="no"> NEOMORPHIC™ Docs </span> </a>  </div> <div class="sl-flex print:hidden astro-kmkmnagf">  </div> <div class="sl-hidden md:sl-flex print:hidden right-group astro-kmkmnagf"> <div class="sl-flex social-icons astro-kmkmnagf">  </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-4yphtoen"> <span class="sr-only astro-4yphtoen">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select autocomplete="off" class="astro-4yphtoen"> <option value="dark" class="astro-4yphtoen">Dark</option><option value="light" class="astro-4yphtoen">Light</option><option value="auto" selected class="astro-4yphtoen">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label>  </starlight-theme-select>  <script>
 	StarlightThemeProvider.updatePickers();
 </script> <script type="module">const r="starlight-theme",o=e=>e==="auto"||e==="dark"||e==="light"?e:"auto",c=()=>o(typeof localStorage<"u"&&localStorage.getItem(r));function n(e){typeof localStorage<"u"&&localStorage.setItem(r,e==="light"||e==="dark"?e:"")}const l=()=>matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";function t(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e==="auto"?l():e,n(e)}matchMedia("(prefers-color-scheme: light)").addEventListener("change",()=>{c()==="auto"&&t("auto")});class s extends HTMLElement{constructor(){super(),t(c()),this.querySelector("select")?.addEventListener("change",a=>{a.currentTarget instanceof HTMLSelectElement&&t(o(a.currentTarget.value))})}}customElements.define("starlight-theme-select",s);</script> <script type="module">class s extends HTMLElement{constructor(){super();const e=this.querySelector("select");e&&(e.addEventListener("change",t=>{t.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=t.currentTarget.value)}),window.addEventListener("pageshow",t=>{if(!t.persisted)return;const n=e.querySelector("option[selected]")?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}}customElements.define("starlight-lang-select",s);</script> </div> </div> </header> <nav class="sidebar print:hidden astro-vrdttmbt" aria-label="Main"> <starlight-menu-button class="print:hidden astro-jif73yzw"> <button aria-expanded="false" aria-label="Menu" aria-controls="starlight__sidebar" class="sl-flex md:sl-hidden astro-jif73yzw"> <svg aria-hidden="true" class="open-menu astro-jif73yzw astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg> <svg aria-hidden="true" class="close-menu astro-jif73yzw astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg> </button> </starlight-menu-button> <script type="module">class s extends HTMLElement{constructor(){super(),this.btn=this.querySelector("button"),this.btn.addEventListener("click",()=>this.toggleExpanded());const t=this.closest("nav");t&&t.addEventListener("keyup",e=>this.closeOnEscape(e))}setExpanded(t){this.setAttribute("aria-expanded",String(t)),document.body.toggleAttribute("data-mobile-menu-expanded",t)}toggleExpanded(){this.setExpanded(this.getAttribute("aria-expanded")!=="true")}closeOnEscape(t){t.code==="Escape"&&(this.setExpanded(!1),this.btn.focus())}}customElements.define("starlight-menu-button",s);</script>   <div id="starlight__sidebar" class="sidebar-pane astro-vrdttmbt"> <div class="sidebar-content sl-flex astro-vrdttmbt"> <sl-sidebar-state-persist data-hash="1idj8kr" class="astro-kku4brbg"> <script aria-hidden="true">
 		(() => {
@@ -317,173 +437,4 @@
 		})();
 	</script> </sl-sidebar-state-persist>  <div class="md:sl-hidden"> <div class="mobile-preferences sl-flex astro-wu23bvmt"> <div class="social-icons astro-wu23bvmt">  </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-4yphtoen"> <span class="sr-only astro-4yphtoen">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select autocomplete="off" class="astro-4yphtoen"> <option value="dark" class="astro-4yphtoen">Dark</option><option value="light" class="astro-4yphtoen">Light</option><option value="auto" selected class="astro-4yphtoen">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label>  </starlight-theme-select>  <script>
 	StarlightThemeProvider.updatePickers();
-</script>   </div>  </div> </div> </div> </nav> <div class="main-frame astro-vrdttmbt">  <script type="module">const a=document.getElementById("starlight__sidebar"),n=a?.querySelector("sl-sidebar-state-persist"),o="sl-sidebar-state",i=()=>{let t=[];const e=n?.dataset.hash||"";try{const s=sessionStorage.getItem(o),r=JSON.parse(s||"{}");Array.isArray(r.open)&&r.hash===e&&(t=r.open)}catch{}return{hash:e,open:t,scroll:a?.scrollTop||0}},c=t=>{try{sessionStorage.setItem(o,JSON.stringify(t))}catch{}},d=()=>c(i()),l=(t,e)=>{const s=i();s.open[e]=t,c(s)};n?.addEventListener("click",t=>{if(!(t.target instanceof Element))return;const e=t.target.closest("summary")?.closest("details");if(!e)return;const s=e.querySelector("sl-sidebar-restore"),r=parseInt(s?.dataset.index||"");isNaN(r)||l(!e.open,r)});addEventListener("visibilitychange",()=>{document.visibilityState==="hidden"&&d()});addEventListener("pageHide",d);</script> <div class="lg:sl-flex astro-67yu43on"> <aside class="right-sidebar-container print:hidden astro-67yu43on"> <div class="right-sidebar astro-67yu43on"> <script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C181hMzK.js"></script><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.CKWWgpjV.js"></script><div class="lg:sl-hidden astro-pb3aqygn"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-doynk5tl"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-doynk5tl"><details id="starlight__mobile-toc" class="astro-doynk5tl"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-doynk5tl"><span class="toggle sl-flex astro-doynk5tl">On this page<svg aria-hidden="true" class="caret astro-doynk5tl astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-doynk5tl"></span></summary><div class="dropdown astro-doynk5tl"><ul class="isMobile astro-g2bywc46" style="--depth: 0;"> <li class="astro-g2bywc46" style="--depth: 0;"> <a href="#_top" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#headline-metrics" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Headline metrics</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#benchmark-brief" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Benchmark brief</span> </a> <ul class="isMobile astro-g2bywc46" style="--depth: 1;"> <li class="astro-g2bywc46" style="--depth: 1;"> <a href="#summary-measurements" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Summary measurements</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#recall-latency-at-1000-entries" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Recall latency at 1,000 entries</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#memory--local-processing" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Memory + local processing</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#recorded-accuracy--neomorphic--selected-ai-models" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Recorded accuracy — NEOMORPHIC™ + selected AI models</span> </a>  </li> </ul>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#ssii-architecture--measured-performance" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">SSII Architecture · Measured Performance</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#methodology-notes" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Methodology notes</span> </a>  </li> </ul> </div></details></nav></mobile-starlight-toc></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-pb3aqygn"><div class="sl-container astro-pb3aqygn"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-g2bywc46" style="--depth: 0;"> <li class="astro-g2bywc46" style="--depth: 0;"> <a href="#_top" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#headline-metrics" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Headline metrics</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#benchmark-brief" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Benchmark brief</span> </a> <ul class="astro-g2bywc46" style="--depth: 1;"> <li class="astro-g2bywc46" style="--depth: 1;"> <a href="#summary-measurements" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Summary measurements</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#recall-latency-at-1000-entries" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Recall latency at 1,000 entries</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#memory--local-processing" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Memory + local processing</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#recorded-accuracy--neomorphic--selected-ai-models" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Recorded accuracy — NEOMORPHIC™ + selected AI models</span> </a>  </li> </ul>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#ssii-architecture--measured-performance" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">SSII Architecture · Measured Performance</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#methodology-notes" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Methodology notes</span> </a>  </li> </ul> </nav></starlight-toc></div></div> </div> </aside> <div class="main-pane astro-67yu43on">  <main data-pagefind-body class="astro-bguv2lll" lang="en" dir="ltr">    <div class="content-panel astro-7nkwcw3z"> <div class="sl-container astro-7nkwcw3z"> <h1 id="_top" class="astro-j6tvhyss">Performance Benchmarks</h1>  </div> </div>  <div class="content-panel astro-7nkwcw3z"> <div class="sl-container astro-7nkwcw3z"> <div class="sl-markdown-content"> <div class="sl-heading-wrapper level-h2"><h2 id="headline-metrics">Headline metrics</h2><a class="sl-anchor-link" href="#headline-metrics"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Headline metrics”</span></a></div>
-<div class="nm-metrics"><div class="nm-metric"><p class="nm-metric__label">Memory Recall Accuracy</p><p class="nm-metric__value">99.9%</p><p class="nm-metric__note">100 trials / 7 bindings</p></div><div class="nm-metric"><p class="nm-metric__label">Memory Recall Latency</p><p class="nm-metric__value">13.834 µs</p><p class="nm-metric__note">Median local recall</p></div><div class="nm-metric"><p class="nm-metric__label">1K-Entry Recall Latency</p><p class="nm-metric__value">0.235 ms</p><p class="nm-metric__note">Median, M4 Pro</p></div><div class="nm-metric"><p class="nm-metric__label">KV Representation Ratio</p><p class="nm-metric__value">3.2x</p><p class="nm-metric__note">68.75% fewer representation bytes; cosine similarity 0.995</p></div><div class="nm-metric"><p class="nm-metric__label">Local SNN Forwards</p><p class="nm-metric__value">2.34M/s</p><p class="nm-metric__note">Batch size: 8,192</p></div><div class="nm-metric nm-metric--healthy"><p class="nm-metric__label">Node Health</p><p class="nm-metric__value">Optimal</p><p class="nm-metric__note">99.98% Node Uptime</p></div></div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>Metric</th><th>Value</th><th>Note</th></tr></thead><tbody><tr><td>Memory Recall Accuracy</td><td><strong>99.9%</strong></td><td>100 trials / 7 bindings</td></tr><tr><td>Memory Recall Latency</td><td><strong>13.834 µs</strong></td><td>Median local recall</td></tr><tr><td>1K-Entry Recall Latency</td><td><strong>0.235 ms</strong></td><td>Median, M4 Pro</td></tr><tr><td>KV Representation Ratio</td><td><strong>3.2x</strong></td><td>68.75% fewer representation bytes; cosine similarity 0.995</td></tr><tr><td>Local SNN Forwards</td><td><strong>2.34M/s</strong></td><td>Batch size: 8,192</td></tr><tr><td>Node Health</td><td><strong>Optimal</strong></td><td>99.98% Node Uptime</td></tr></tbody></table>
-<div class="sl-heading-wrapper level-h2"><h2 id="benchmark-brief">Benchmark brief</h2><a class="sl-anchor-link" href="#benchmark-brief"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Benchmark brief”</span></a></div>
-<p class="nm-kicker__byline">NEOMORPHIC™ — Trinity Sky / Benchmark Brief / 10 September 2026</p>
-<p><strong>Fast recall. Efficient AI memory.</strong> Key system measurements alongside industry AI benchmark context.</p>
-<div class="sl-heading-wrapper level-h3"><h3 id="summary-measurements">Summary measurements</h3><a class="sl-anchor-link" href="#summary-measurements"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Summary measurements”</span></a></div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>Result</th><th>Measurement</th><th>Basis · evidence ID</th></tr></thead><tbody><tr><td><strong>13.834 µs</strong></td><td>Median local recall</td><td>1,800 timings · B34</td></tr><tr><td><strong>0.235 ms</strong></td><td>Median 1K-entry recall</td><td>M4 Pro · B35</td></tr><tr><td><strong>3.2×</strong></td><td>KV representation ratio</td><td>INT4 representation · B03</td></tr><tr><td><strong>2.34M/s</strong></td><td>Local SNN forwards</td><td>Batch 8,192 · B15</td></tr></tbody></table>
-<div class="sl-heading-wrapper level-h3"><h3 id="recall-latency-at-1000-entries">Recall latency at 1,000 entries</h3><a class="sl-anchor-link" href="#recall-latency-at-1000-entries"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Recall latency at 1,000 entries”</span></a></div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>Statistic</th><th>Latency</th></tr></thead><tbody><tr><td>Median / p50</td><td><strong>0.235375 ms</strong></td></tr><tr><td>p95</td><td>0.270209 ms</td></tr><tr><td>p99</td><td>0.319417 ms</td></tr></tbody></table>
-<p>Same M4 Pro run. Mean-derived rate: 4,158 recalls/s. Standalone probe p99: 24.875 µs in a separate run.</p>
-<div class="sl-heading-wrapper level-h3"><h3 id="memory--local-processing">Memory + local processing</h3><a class="sl-anchor-link" href="#memory--local-processing"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Memory + local processing”</span></a></div>
-<ul>
-<li>68.75% fewer representation bytes achieved via the 3.2× KV ratio; cosine similarity 0.995.</li>
-<li>SNN: 2,337,749 forwards/s; 3.5042 ms mean per batch, 12 timed batches after 5 warmups.</li>
-</ul>
-<div class="sl-heading-wrapper level-h3"><h3 id="recorded-accuracy--neomorphic--selected-ai-models">Recorded accuracy — NEOMORPHIC™ + selected AI models</h3><a class="sl-anchor-link" href="#recorded-accuracy--neomorphic--selected-ai-models"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Recorded accuracy — NEOMORPHIC™ + selected AI models”</span></a></div>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>System</th><th>Test</th><th>Recorded accuracy</th></tr></thead><tbody><tr><td><strong>NEOMORPHIC™</strong></td><td>100 trials / 7 bindings</td><td><strong>100.0%</strong></td></tr><tr><td>Kimi K3 (max)</td><td>AA-LCR v1.1 / long-document reasoning <sup>[1]</sup></td><td>88.7%</td></tr><tr><td>Claude Fable 5.1 (max with fallback)</td><td>AA-LCR v1.1</td><td>85.3%</td></tr><tr><td>GPT-5.6 Sol (max)</td><td>AA-LCR v1.1</td><td>84.0%</td></tr><tr><td>Gemini 3.8 Flash (medium)</td><td>AA-LCR v1.1</td><td>84.0%</td></tr><tr><td>GPT-5.6 Terra (max)</td><td>AA-LCR v1.1</td><td>83.0%</td></tr><tr><td>GPT-6 Astra (max)</td><td>AA-LCR v1.1</td><td>80.7%</td></tr><tr><td>Grok 4.6 (high)</td><td>AA-LCR v1.1</td><td>80.3%</td></tr></tbody></table>
-<div class="sl-heading-wrapper level-h2"><h2 id="ssii-architecture--measured-performance">SSII Architecture · Measured Performance</h2><a class="sl-anchor-link" href="#ssii-architecture--measured-performance"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “SSII Architecture · Measured Performance”</span></a></div>
-<p><strong>Built for the edge of what hardware can do.</strong> Every number below is measured on production hardware. No simulation. No theoretical upper bound.</p>
-<div class="nm-metrics"><div class="nm-metric"><p class="nm-metric__label">Write-Path Arithmetic Reduction</p><p class="nm-metric__value">96.31%</p><p class="nm-metric__note">The write path bypasses full-cycle arithmetic transforms, reducing operations per transaction by 96.31% without sacrificing archive fidelity. Sustained write throughput exceeds 10,000 operations per second on edge-class processors.</p></div><div class="nm-metric"><p class="nm-metric__label">Cache-Resident Architecture</p><p class="nm-metric__value">L1 / L2</p><p class="nm-metric__note">Active traces and subband windows are sized to fit entirely within L1 and L2 processor caches. Main-memory bus latency and DRAM page conflicts are eliminated by design, not by optimization pass.</p></div><div class="nm-metric"><p class="nm-metric__label">Recovery-Phase Arithmetic Reduction</p><p class="nm-metric__value">99.07%</p><p class="nm-metric__note">Write-ahead logs use additive complex deltas rather than full-state snapshots. A 100,000-transaction log is fully restored in under 15 milliseconds — a 99.07% reduction in recovery-phase arithmetic operations.</p></div><div class="nm-metric"><p class="nm-metric__label">Phase Noise Propagation</p><p class="nm-metric__value">0 dB</p><p class="nm-metric__note">Rotational phase shifts are isolated from amplitude metrics at the architectural level. Phase errors do not compound across reasoning hops, ensuring stable multi-hop compositional accuracy regardless of chain depth.</p></div><div class="nm-metric"><p class="nm-metric__label">Linear Capacity Scaling</p><p class="nm-metric__value">∞</p><p class="nm-metric__note">Conventional holographic memory saturates logarithmically as archive depth grows. SSII replaces winner-take-all decoding with a tail-average margin comparison, shifting the saturation boundary to a continuous linear scaling model. Storage capacity scales with archive depth, not against it.</p></div><div class="nm-metric nm-metric--healthy"><p class="nm-metric__label">Thermal Design Power</p><p class="nm-metric__value">5.0W</p><p class="nm-metric__note">Full-stack operation — including write, recall, and archive maintenance — runs within a 5.0-watt thermal design envelope. Compatible with resource-constrained edge hardware and mixed-signal optoelectronic substrates.</p></div></div>
-<p><em>Performance figures are operator measurements on production implementations. Independent verification available under NDA.</em></p>
-<div class="sl-heading-wrapper level-h2"><h2 id="methodology-notes">Methodology notes</h2><a class="sl-anchor-link" href="#methodology-notes"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Methodology notes”</span></a></div>
-<ul>
-<li>Benchmark evidence IDs: B34 (12 Jun), B36 (16 Jun), B03 (16 Jul), B35 and B15 (15 Aug 2026).</li>
-<li>SNN benchmark executed on Apple Silicon MPS (Apple M5 Pro).</li>
-<li><sup>[1]</sup> Artificial Analysis, AA-LCR v1.1: 100 long-document questions; model settings shown. Scores captured 9 Sep 2026.</li>
-</ul>
-<p>See also <a href="/docs/benchmarks/joules-per-decision/">Joules per Fill, Joules per Decision</a> for full per-joule energy and AI decision economics, and <a href="/docs/overview/analog-intelligence-infrastructure-layer/#memory-recall-performance">Memory recall performance</a> in the Overview.</p> </div> <footer class="sl-flex astro-3yyafb3n"> <div class="meta sl-flex astro-3yyafb3n">   </div> <div class="pagination-links print:hidden astro-u2l5gyhi" dir="ltr"> <a href="/docs/architecture/evolution-to-e8-geometric-compute/" rel="prev" class="astro-u2l5gyhi"> <svg aria-hidden="true" class="astro-u2l5gyhi astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg> <span class="astro-u2l5gyhi"> Previous <br class="astro-u2l5gyhi"> <span class="link-title astro-u2l5gyhi">Evolution to E8 Geometric Compute</span> </span> </a> <a href="/docs/benchmarks/joules-per-decision/" rel="next" class="astro-u2l5gyhi"> <svg aria-hidden="true" class="astro-u2l5gyhi astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg> <span class="astro-u2l5gyhi"> Next <br class="astro-u2l5gyhi"> <span class="link-title astro-u2l5gyhi">Joules per Fill, Joules per Decision</span> </span> </a> </div>   </footer>  </div> </div>   </main> </div> </div>  </div> </div>  </body></html>
+</script>   </div>  </div> </div> </div> </nav> <div class="main-frame astro-vrdttmbt">  <script type="module">const a=document.getElementById("starlight__sidebar"),n=a?.querySelector("sl-sidebar-state-persist"),o="sl-sidebar-state",i=()=>{let t=[];const e=n?.dataset.hash||"";try{const s=sessionStorage.getItem(o),r=JSON.parse(s||"{}");Array.isArray(r.open)&&r.hash===e&&(t=r.open)}catch{}return{hash:e,open:t,scroll:a?.scrollTop||0}},c=t=>{try{sessionStorage.setItem(o,JSON.stringify(t))}catch{}},d=()=>c(i()),l=(t,e)=>{const s=i();s.open[e]=t,c(s)};n?.addEventListener("click",t=>{if(!(t.target instanceof Element))return;const e=t.target.closest("summary")?.closest("details");if(!e)return;const s=e.querySelector("sl-sidebar-restore"),r=parseInt(s?.dataset.index||"");isNaN(r)||l(!e.open,r)});addEventListener("visibilitychange",()=>{document.visibilityState==="hidden"&&d()});addEventListener("pageHide",d);</script> <div class="lg:sl-flex astro-67yu43on"> <aside class="right-sidebar-container print:hidden astro-67yu43on"> <div class="right-sidebar astro-67yu43on"> <script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C181hMzK.js"></script><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.CKWWgpjV.js"></script><div class="lg:sl-hidden astro-pb3aqygn"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-doynk5tl"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-doynk5tl"><details id="starlight__mobile-toc" class="astro-doynk5tl"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-doynk5tl"><span class="toggle sl-flex astro-doynk5tl">On this page<svg aria-hidden="true" class="caret astro-doynk5tl astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-doynk5tl"></span></summary><div class="dropdown astro-doynk5tl"><ul class="isMobile astro-g2bywc46" style="--depth: 0;"> <li class="astro-g2bywc46" style="--depth: 0;"> <a href="#_top" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#headline-metrics" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Headline metrics</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#benchmark-brief" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Benchmark brief</span> </a> <ul class="isMobile astro-g2bywc46" style="--depth: 1;"> <li class="astro-g2bywc46" style="--depth: 1;"> <a href="#summary-measurements" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Summary measurements</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#recall-latency-at-1000-entries" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Recall latency at 1,000 entries</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#memory--local-processing" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Memory + local processing</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#recorded-accuracy--neomorphic--selected-ai-models" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Recorded accuracy — NEOMORPHIC™ + selected AI models</span> </a>  </li> </ul>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#ssii-architecture--measured-performance" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">SSII Architecture · Measured Performance</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#methodology-notes" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Methodology notes</span> </a>  </li> </ul> </div></details></nav></mobile-starlight-toc></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-pb3aqygn"><div class="sl-container astro-pb3aqygn"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-g2bywc46" style="--depth: 0;"> <li class="astro-g2bywc46" style="--depth: 0;"> <a href="#_top" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#headline-metrics" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Headline metrics</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#benchmark-brief" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Benchmark brief</span> </a> <ul class="astro-g2bywc46" style="--depth: 1;"> <li class="astro-g2bywc46" style="--depth: 1;"> <a href="#summary-measurements" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Summary measurements</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#recall-latency-at-1000-entries" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Recall latency at 1,000 entries</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#memory--local-processing" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Memory + local processing</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 1;"> <a href="#recorded-accuracy--neomorphic--selected-ai-models" class="astro-g2bywc46" style="--depth: 1;"> <span class="astro-g2bywc46" style="--depth: 1;">Recorded accuracy — NEOMORPHIC™ + selected AI models</span> </a>  </li> </ul>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#ssii-architecture--measured-performance" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">SSII Architecture · Measured Performance</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#methodology-notes" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Methodology notes</span> </a>  </li> </ul> </nav></starlight-toc></div></div> </div> </aside> <div class="main-pane astro-67yu43on">  <main data-pagefind-body class="astro-bguv2lll" lang="en" dir="ltr"><script id="neo-encrypted-main" type="application/json">{"iv":"WwZeL33ir9T3huIn","ct":"Wq3h04lrwcij4gZj+Cia3TObBD7BZPx4B1YrVDbtTu1+rbPMGlmqTHmDYJLZsvSmInN0orJNRb+6sdRhDSBYGYrmoMDWAfDv2FDAuEXotDRVsYO+KAUwuuRqJ3eh8JzGpNcKPpP1qaehjHy+E7H/ZQN8hdTwzsy9H3TTaf5fx/oAfExs++qZIcF5oF1zx9+WGlbKHmmJjAix22jzxp+mflEvSWsNEgZsfLX7M3SR9PQI9hTPZ1b0FdYi7tnM5C70bv/wjS5t5dIV/B5syeWVnWPO+gXFJbp3YoFFJu1gXieCHVHaqveefaKbl1hEyuPkfiD6CzPspDTz4ihqlEjRp/THBfSeoOH+bbPkNXM0veoR4ePPYN1GWpU77vhBvtbiU5mXoqfiCZ30CrysW9qGvI7e3RSsdVr1pP61dTpzS7S6gTNJOg1oOdjHBsVWngr46AQ8v1BZJEjFApKo/iEahiqB2U4BYv4PntmbonCdnEb/YhBfmGvsIseWcl5TCv5Aod40iusFqnnNu+TuXz4pvgVwzvlx4nZPP2h1NpG+Nb7VPWQsZr2kencWUTJZYViQydJguTV7YT8gGwgtp0O/94RwwBPwjrvB+JKAGeTqztWACcjuVFJJhySa8u88vSF4bKdEWCEDP43x4HepY7XOt498Z4PIv89j0g27vUu/an+k1f8wS9Il6IatdGUPhDxuFkpMsxrwBbn/+jLgm98XIdPICFQrvsB0v3UHlhQB0FM2LmRQdFPzh+DJ9gUO+l6Gkum0XyzzKYl/Ckfa2UB7mMPPcM8P2YtmtY5SvhOjevgPTmbwolsQYt4a/DEBMSK99oeQ7VSzBR+2vh0jmkWivP61/INJ1IwzIvHSu8o1QDwdzkLdPiLSSmj3q3+h98a2FJ15Fbre9b0zbBt9UlSo/6YzWrS0RyH6pv/a0A7PH6T2a95cseDb+SUXYKsPuoY4i9SLMTEx6Lb6CYUjreX+3RwUo+WE7RYH871l3wUN2V3v3KUOg+1+P7q9ZqoWBFFZTTba0cB6JjsdGzu52CDUj6gXwhCBnjr/iMxGW28OhZ+vaxEQm/18ESG30N/O9bnyUWat93qQxOOH2XEiOayNUYhZBp7XsRYJ/RIM1zNTqOfoLY4uNx/DtU4RECnkZk6hF1I7SB3C6ZtmC1nmXpjdIV++tEcHaRzS7YzOxyxgb91jjCKcHi+ISrtc3+GUCK8vsbEnoDFSKOADezc/0PpfRFySycdPvMR8d86g6YGovVPRWbknVeb6UcDZVS5f2eydQL/gok1mLzEtE00Nn4Bh7RjjFPQnv/L5Yg855L7SCJapUZS6MxJrlNiYOUF02Njyv7mGDApfC1maXdH0U8s524X2vwWdYH5rpHCwySFQhT2MKzfDhNzVmqxBxj+GCl1SK9AJfyLao/ACYTPeAxnP47sN0E945tVaoi9rY5APHR0q5wV3qmwF3MmfaocW5j7GhHrmoMPPWBeWutpmDwp6KPy7sgViShZihl9DU+Q8EOSr0BK6R9uy1tfAIw4qsnQY8ZGI59pElPKMH5Lk3qsdiAcHDu9rxV22gekodOfZ1OlHnwph57VchEP3qzF96HY4/SpbjLSigrkFy/3kNf2TSrgSyDNfuyu1HxWaum8H2gKMyLrHNRDoHTnZRUpe4kbsqqrxvbq6yOGcSc5e+gttp7PB8WtCzdA8eMKSj8+VJV2w9ckbsFCVrN5Q4uIl9akVCPi2jJuZ0T4FKVfwp/rIO+XESRoGdhFXEN+53uN8Z1fSwZan6mCnUXfbdyvZfG7AZOIeLLipz/valYYEf0PYgCprzSurD+jFdFnpW0MF2ssorzAPHnfNzGRIrXnL4dtr2qkX9H/vhqt9XM35Hk1teCJk1CxxP1QmAevQaXXKuB3fG0HaGi27YOPnD6m+bGXWgAAuoBxrzjFEWGFpZjfP5WTkg1nKA+MRG+wMBDUKHZBQU//SbsAQYu8lO9dWpgHHlEnVTv9DSyb0Olg0sP9XBFB0OIES+6Y9jLPUKXIjHQhasR+JI1L9gClhbwgeCEskm0uyW/UvtxUhuD4EIiFnq6ZhZQb+Um3FbzV6LoEkbN+zoDYiSdRoPyW1YBO067SEGkpmTSEMOvtobsyXF/50RwHMd4Wi3KYJ+4BKetW0WSsLipYhKaP9J6xqPVAprGi7kLiv8sOEtv4Huk5mpxpGxdv1RWBctCnHqJgx7z984P+yVFd7vsqDiWNSMXBUKIkEUdTOzS4e6m6XYCF7Q8I1K4CwH1dCpErA6lJ17qdea0KFAakHkz0tKSbj5C71s5Og6dSjR2KyQDhyGcj17+nkP1xTtxOpNcJuoLsZNp66OUxYgF8dSH07J3V2DojRf8q16Ls3oMPvQ/9cYsJSM5lGCGTNNbMhuzFv31Eh5n6wMtbLoQ/Xx6dV62mi4+SHrktKkMFRqXtdG9ZJk9vkmKqb14yct69NIdMlw9L+L3FrbXyjNy3hBQTeAiCDqKygabkuM4qVzSPL7/eTmpwiUBx5OoglE3yRjd7prmJzm3N/xNvJMboQQMn84oRd7NcrnuO1OaR7TgPpajz7pl6e0ZAcldb5NenpKzM7QzgUXkzSMrMtstniHSG2HqMZc59dN7LwifjdnThP9um8gSmDPT0mOILlNYMX4u9ZdgEy7WhpOOKJuwF+KBKXV/kQ5xCL3Zn4XSyDT44rBVDYXMQbdcs/p2Z3E96TJtRmlsoyMQL4DmABRoqsGemCXC4Im3rUV59YCbTeILk/SxJEKXlu6SDmpHZe5QfUQX/wCiRpQfZfcUOGJ4Yay6lqq6azfduArDuyhFrhN7nlBjh/HlBgfZaeVQpGQb5vUhv7d+oUI/aENhcuQLUxsA0ns+4mSwvhK8ZWEc+jVOpLD+zZ6ygIayDkqnrBW1PyKH2XvBOhr74RC+PzTJm4EgCwZiXKTaUKWWnHemM7Xt95ZM7PVY02lrWhLvvPAvFn+IBt/AugnOri97SNQxsX2WpJ4BRqHOZdboTDxxPAn80pGv2iZYjbbJ6T2560rzlE3CI3WdVJr4aPEhN4/7B+Q5NImti4ixSQIUMjo6MWwotrzzscn9odL3yaWjKx0juMzUR360IRiBulSSy+Z15lbVC0cADDanbSYmaL0htShWSdQjSSy6nY0zQcNAzFoFAotrSTXCne3NUUM+hVq1MOh1tWf7XnbaG5xEWKajFr7PGI9weRQa1YP2iRKJHMVegBvg6yotbg89BSgW/fd89KBG+HwEMhxDKgAFxOO6R23j4zRXONvUJiZZFVFcudA/5ZSgShrolCWd3RGdZ9eZSHKgfiNI1S781hRqo6RvyU26yaW8r0k024VFJ2MSNYZjSXjkMQozaRIMt/yN1V0OGmZPQAU14X4jhLU3IA2xNcMKYqByI0tSUyBlSfBG/nzQn66HgN2UtV+cG8IRw7I8FgziQvb3oBB8bJNL6i9nb6P5ch8oRpw6aAjlquPteYbEMA24kHlTQ5qa8r+cKrBoEcmuJ7RHW4lT6FYmVQMXFnyYuKjsuA+TnYqPJhLnXSbDuIfeghlDLgdo2C5hfbrynCDBdOphnSUZe+DzMFA1dEP33o712B/RyGBLGE35BRt+k7aeS27+Wg6ZEhM8XoGCX5PboeSfT98RD+sACyRN9dnfbtACgbMHd/vu8nxK2boOBXIiTi1L6Tx8EC00H2QLtTpqSvRVX6TWyQmKDZ0QXFpQhh3siNNBeHzPuyz+khZZXJanbKNjn/KsofLIOXX2qZq/KFyj//e5V3nGZb5jB5pOi9I2/LoCaO/PBb9mi7nzu10v9f5QL8CvR1q5/DGSDC0X3N9a757JD0WhD8TraqJURjWQvZfcVilq618wyEoypPsNTCTKEhQbo8rTOxVWJx2GvLVfm+hjwIj007PXBerN4Gy09JMuwPDtuqNnFy2tO4VNP021Jr7sxqDnDSoFl6wBGirogT2UilRumNWd2YGZuDmceFS3AqlKDPJGGWC4aaXrriFWTXICRVBK72TrDoLS8VlnR9SeYS8LDmdCm4DJ7cH+uMkFicZgA/SZauHgDkEWpMNR1ymC15dLrSlrVP06hoJtxhFRwOh6vzDwh3sZOo6ePi1Hx0QvLYUnMIGyDv2uGouoslDZC1/XvXl7QSUCOzta5ERGjE9Qkvipl2gJEFmAMEzWGqKABN8AJMKcGzzDNiAkRh2LNzOd7XNmpveQu4uhcu7H2pqt3D76p3Jjs/lQT70i+j9gMkgFdf61u3zX6I87wqDlcwI1BiHQc+/DxQtc4B48Ko4FbLw+mAXgPNswaK7BjcK3FDgyrkzoKK5MUNZtuTC4/kwN9hSx+Gqvqhawy5eBhpwt0ZqzSyENWR6aE+AIFGw5YW92ADlCEB5eqpovcWua0xB/p4UlkE8ay9bKRm8c9A74XBGRHcggHPlmZBX6Jqgdaef/oUumOgJGESNgw0ZdsS/F+E7jHKUzOJkjgEoGf5Q2+Wwrt1JjlycwBKCf01LQAXy/u03kPuwNURBv/YPxONg/enfmWXq2mf/Dk34c/vATllJ2Gj7FqMMIqOL91ZzrwbbriAgElXyq26z8CyzCotXajZDUmmCtJp5ySHk6mLkih/uZqOKn064cxrGQq8bsNXM0RlFflPSe9LPbq3OpxJr8CYiFZpFIaHwWmfNjfF1U15UG1Tt05/t8VwtDWcwLE7/N9dawoWS44LAHNDNJcZyYYsKTQ1BZ8IbzTXOjoVgFFBqaTi/Xf32dWDfkWqT1twtGMbpt8PoxcXTiLK8O/I9jUQM68zFrN8JpTu1Ipg23QqzrIkVAaUdCKA+e4c6vso7ggcX0kG4MXkWtxBJfvYhrH30bbSpmzCa+E2IL0BjkUU4UDENy8mgSneOobwkMa9Fj/H/oap53U4Ckix7dv2OSoRn8nvDb2pWTRVfx2PLpFrOyReF8xaw/qTEA+8NX+4D98UiTH1Hk9uUGdVpHI0a82kMuih8mSXxQaaUJwfLT40kpM9tvUwB8RqBOm+vesBjcz2uqxIb1gHW3s7y8AMLoA2UzS6FUmI3woM9bu1YakSSjbV0b3TZo5xvDil4vEj07trgmr6Ys2Pq6GIHUcgXPmdv+kGXplsLZrHElkV/mCgmmlbLSDP1llNFdPhdUulYjcOFU2qaV6ZvMewjG3q+D3iPSLjxUw8i5jep99L3HQZ5C4vc9dXshejkyi29AjR+A0Gwj/KP1AM5BnB9fmoL8teEw1KtNGxQBENjaKJXjht0s2VWRMUG34a9E3cYHHcci1rVG6PYmYMRZgadx7iY4ibk8YRd34sQ15I9GG5x9clB1XXWcjrVrOCu02VYv9msC6beRPSkr72e9OjPWyv9wPCYiT6kEMm7r0Nsj8V9ib/520Qn8wSvt+prG5dUFv5qigX7Fq4LH1l2R86LM4QiFclHWvbsNXVKdjvV8i0Uy+OW1rhvfA+GhYjawohHbGGQhBWdfutxHJnjVaxrTXhOT9H2nAis/Q9mKjQu3BzBtof5DL4qSMw/jgLIL0YZCZfyujFSQWn8nr/Nws0segauSLpxP82AEF7LKFE5ux8PykcTyI+9J33fGNp1S7aT0Z0CZ3Her1bHBBEW+L7bDr59SRML4EcBwDEX3Hg6vYJsP+1wFmXIZcdPYXxIMmm73Bh7P6zdEUG4K5VOuUjoZXkVn6clwRFJzjfJHmvPqrCyDwo77uq3SQ9r4U5q0V1BX8tM2Vh+ubqA8KKrPDo8WXVJdegFRRYeXUBRb55/vy5b3cglqNcG0l2wFi7atu0sxQDIZ45qjzBU6o4Uy1LH6d20rRU5I65C6GOK40qZ9DC3rqlzffrFiiljkOHxipesWSfhgaPOSe5e0ugZzPA8vffAe7q4lVseji+WxxY36xakCldQ5sy9PJt2Sowg1eR2b3sr8NKmxmBW5O5aDa3D4AdPmcsaGvNigUwgo8xxKmXE2FhXgwxLfDbhFy3+Nl+shMM3yNCxwagf4k6Q3ahGTJmySAXlNbi4FI79T1eu4S5GW0nSn0qfG7qXQWSBiupsdiybZ7h2QjmxTvZ+3wxEfLQtxumotxnH8MHbFKl+gOBwjtRRNirEF6BPXeS0279ECj5L+1k5chtCuZKhjc8jVgNWgRe5Xp4ZOxPIA/8O9CnQA3Lcj263AUBuRBKrkWKd5UsfEiAq5dC2aO3XHMLrH1KCqsS6Q1oCxh1fMckA4ybW6EnMJsw+3no1/bXUL4MC73+MOrPoOpLDADqK6wkCs2Lgi8fPN7QOiKxJQXgGkVV6vCBUsOnHV75H2LT2FQOJUqeGFjjWp8AbQ37fXY9YIi9k4z2ngoeCHtxH9AwowaqRVuzo7r+QtaXdt7+fRpcZla2n/UAit4G0prMVDEMMzYqj+I51d1BggDdDkaFIgb+Aj5+LIFw9I1MklXklNo/Whb9BP5y2KWvZUtKVJ2DCt/7HEW4jvGyLkoCp7uULgLmse+jrbhbxFrtTz19/Q/qTulnfU5Vbd2xP28/8OUb1JgcOhCXpfc0L5Ip0xZ/yGK+7UsNVH5kU+KHAUaWxCcZ5EDsfyHpChnbf2Bj6POd1PYJVkS+zjSUk3WVit5uKAh24l3o274EAIu54bp2qt7FyyTMwqUg0bIHZQGrl4b5BsMGUb9v5WnQRK/titS7XQumiBDj8Jvi3PQZMh0PlftYbHoLTG3PMxulwMEfbkUl2OLRnfNNy4ozBvwOWc9zv8H5lyrUP3ityjIxK0NiTQCXssgYtDBQ02T5Aywl/ccSev/vpquQrNS5O88TzhhOxjn/FvNdIGq8KpmnpWDYrrkN43+1Y4YV4PAr05H3T1e82YH4hKn0bT84jpYtBjVGItMQ0l8WcnreP7w9OCLDrCHROYUKqBE2rJw7Y0a6M52tSqCEffIkuLIkPfIDcMSDRUF5CFG7W4oW/7cWooTAHl05TpSUnTOdYTRvYrTf72PukgJ1K5rq3V9X9K/7ERLgE2QWhukA5QOPmVvXP8AGupofG9DfyfecPGD3JG8cDAm5uHsCiCeZC8NqaRjPkg3rIVXZpud/UMkccs/8nu26jaOcmMlgKYtr2sazkTaMnBuk94BHVBo0HoT5ArHQh6c12eZelTEGWn+UczFXcKjCWowMrTpihFRV5VpjuU40IlCBPplbk+Hqq0tT+xGDBE3RZeSnuiU8KDvjJmmqFwOYkPmHC02p8jyt31xs3jeSQt+PgIiX2jCDxErf7T6f1fvid2Xc9UcRMHih2gi6x2d3pGw6rl8xexEZef1QuQXuigd535th465U161kA6XR4oicF3rdp11ihQRnE1C4A/j/Q8NbZLwFyx+cW/wAkMVHQtkwJR0Hz9J8Tp7/b5r5N2dLv9Q7yTLZrTJc/sldDo6J6m5OKMMfx3K3eo1ma9ZoFIgjauOyXV6RzMcyPloSKa8UGOsZPmNel6Yfs/vip7hVmwu9NMZ56iBVHhUREoXp0og8xLKdJKA74kmtfZQF2Mk0hKXgLx0OC9pmUJyFfgAeBK1wrjMP4RWAAu3e2KyQdHSrZ8ulZnGCjv6KZdIct1P5e76gbkSQwOhmoZiqNjWAJpF2w/1OdqCHRGpc1qKM6/XRP4JUD9g6Ve2NL57MiZjaqwCfaGAX6HIJTbP8B2wx2xALtKc+7VIrBX6g6cCJFCg5lF3qci8m+RPh1C5fBmF7uUMuOnwAX6NY0QcJAseEFa0p2FnO5wogXjP4atSndXRUXVPuzA5Yg9GoGfCgdzIwT7cPTFlWH8CTgvB54v86dvC4VquU/9EpYK76hJbjaGlMfO9WQ4yUZamXLS3hlxbhZw5tg7W+xuhaR5SRLWAhkDBHOHNp+nfKygopdoJSTMw+ivXdZvTxLi9/4CfhZJj3cjsfiLsZCBO5uEbZKGVqewlyu+kCqUKC7bqGcKudwYsvCANSOMO7gGSSPTLFO3B16gCw1EjXkmWt70N4tGAGUP9N0y4Vx86HGyxHBo7ptYN8felfzJQeJUfC/UPIvUxuXDiRLX4rssqdccuXAZTTLjzy668PscvcRiNe14Gu0GVCPwp/6ztDI/IDlNqSOtQxo+txqRY5GfxRCXrzXX4Rg0h3OOWuxk4+ZhE588dEyoYsAf/BiLTHmfxoVsyeHGLS4kh9Fzdc/xNsOzaRNZHtztTKOlY9WNTUA0ytGVBpDSmTwCOx3wZs+yykGuwZ5FZZX5bZo33t6gjg1VZu0BUQCddUjGe/kN+dmXEOkzvexCexxgfMe2Z2UaJPMu+GEEYOn6KsbCGX/IB6v6VLBMVlZ29lzfz3h3bdgAEBLNFyf2/zOmE1tfHvzeV+/kdRMf9qKuF2SHmL1yHdW1RR1I4GK73+EOwGrKNHwQHh0EfxGOwR5faQ6s0yCZWZq3tYt4qOjXVB/PTj9SCT1lk65ddpNmOhYM6QYRe9E4IpbEaE0mG7cEHAdiO6rNgEYdSNv6widfn6E1DcFjHB/DNOaBXpb805mnHnOR8//JrlnvPUOBINkJ6cxJQ3fiBnEVfF1EYDldQinZpsC5jyZfSdNAfRt3hI2+9vdzg0JO9wT1ZpOg6P4+2ud8Csc/s/vdhgfjul3VDqkXuw5eDzvXu98mejpvPjjgBvv6KTFRiAq/9RHHZJljOR+yNeRb9Ex6jssIUnkoW9kEHi1vbFrQVZM0f3nLjxgR2k3JYNH9lyZadHA0anGuTXYdQ+UM8qlqrpXYpO2VzZtJNZ/Umul09W2bStuD3oiejmWDrtuhvKKPO0a08UXKUODMn5Nw+fObDf9ehtuisbc2hDRD609yhCkzPnawcNj94EDskvQ2KI6R71oWQ3t2SckrfyJhdhB96kBs0eqMMOh+TcXoQHIadLisJoDSYIKL/kC4z1QcoVMo4S9/Kt7A981foUck1aTNJCTy1ZXpEU14BA+MX4o1vdlW31kgfYW77Kh8MT4D9H8iKhTKNHNcCfplcmP6FX1Njwhl/Nch3TdiyvowER4m9Tw6o9w6LKoMRIZAI8ZwjKJ8mJcWEqhE9qgJJG7gwc/a2hMej47jTFWecY3MgxmOg7Qa127RtCMu9irzamz9wTyfb3T9XkuZ3iEdwT4WGLHMtQG08/j7APv7UssNN0B2kxscuqjWSLiNxBsDb4OZk1BD5/TJ/OcBKjBnrgp3jL04SMwwfyQKqKH+K+fvau+LwMEzw98SOGc6Fs9RbcfxYzLTpEToibK8VVMhzcYpghO3iEzyM7yUzOpezotj0/8gB0pJOTSJjXbf/hvGsV55NXBeW4OH0rT/SJhcMBlnximneJiYv5XQ3D3qxe8Xx/4gDQo7sE2T6Y8uEs8dMsHYXzF29oo4LDzumvalRl4JLGhfsISGUQY2RcIQA4Cm6b7RMZCmGktQwJLZcFvrS0JdDTd8LyEOPUCUFSxvqbBEP4E4mdID2N7q/pUZWV0hVSj8l6n2luPzUprWu/X/FAk0Py542XecH34gb0rIWVCSZOm282ImEo3rL705JH9B1le0YroNz4NKxZ9ELXteMdcmsW6XNSQn7XMy0ztDLBmSIOlIw7H6Ohv6rMWZu70xEQN0ZuS2AiiqR4mixhmkKwXHE5us/WqYOrLjyuUfSTSrwwhAFNH7hDARMZJ7BkB2kI/iazA1UG4hvcFBrGJyOgEPdwhjDlW2vnlzfiUqX7r47hVCyhktUFj5gYUiVnCH3n0yjdPG1wwLtMYFCbRb0MwDDw4S/JE1u/eiZ9lJFZTpxsyCMdg9cwiwoiJEj/wx2C6dN0Yz+Ww+R52mFwI7Vsak8KMX3S78J1pF/CoAVYLTJPtqwkX1znvqbjpkwkZma5Xphx5RTdkz6DlGBPr3ZXPHJ/NxXY3KYGRVXby3jtjnvjb32pz3BXqDLhiN2DNm5F1j5sbcxC9B4L7g1l/OQfNkJzVwJqAHvH8/gqovXtMZKpTpeogcLS9f3DUMWIxV0+zG5GHVtAdskou8+j5O3ek8/6Y8JZp3DX4U6im7UDsdi8UlQuSREIVqBWrKzIuy5TPeHAUsTrItEZ8qCQGjCk55t2jMlSNXf/idiL1VJ3dESgeFNDEawFnNmLmDrf4dEZMOn9K+VnP1yV+UjhcmocgIYkwzDeQzRO1skDe2t6+68WrABhFtvzTKH79RSdKBEyMrndOBUBGaCXU79yGC3aXcM+5dTB4NnIZk02YJvh8bhLhWyS22r49ABgbc7TFQUqL34+yDbXUjV4DdN9CXxKC8VzlShbfZvAlrgFpo9fMSWaoZLuLdaKN/Od9/gKEZeC7g9lTePdu1QctTlJ8RVYyWTN19CF5wQ9w0bTohSH87qi+jzNkgBRYTbKylhYIgy3RGQdXooWCt7RQLr4KNjaDbUAjUO3ix7vjX2kfgX4Wkupwpqw7JlWS2EjSKMhl8/whFschfgJUTaSUsnOSxpJ2+4oyJrDDZMLy3MjY7Cww4ocmDmZYSn3j9MuRlxLmWoUdoU1TtpaSl7VRQpYThC3zV+XNHgDvicgkw9LO5Y+gPmaPehWG8gf+p0GFrvuuctWS4kgPdmoocWmRqVHkOXWJJRg3HqlxmyByBV0lv2Qy0gbpw93LnUUfKeq/Yg55oQflZ1v0+PVc1rXMSa9OjR3afVvwczCpxAOBaj6ga+MrsjE2eYzM21eMKnwRaSSdS1XZXmMxXYzOE5LBmkqk/jHxgUb4fcst/M/WXS6rtAUkSg5qhHn+9Gxa8hIrpfkekRQzBJ4fySXCN4/lGbzNFwGuAOpgGUbyncP2GGEdRAHvvH5tOhi8NGA9D2ZAiVq/C2DiJi/TC1G08HkWxoAd+PHzKRAWmwzamlX2aejKUBWa6LxceRxS79rHNF9EoYczxVHMoMNi985CaAjl5BuHfmhlheZUqFOAA5Fo2lsOSqTZ7js4hujad7Qt8nN7nuqBrgIt6o7aNHSsxdSYRWMSUnJe1AZliqb7wDSzHEx0iq9TAteO6787bRCBYf6lgn49W04jvOFHO2pYh4jw+CLEshnnFkCqiTA5/C6aplM3uIiYH94WpjX92Q5ciVaBQ2kxty5kgHIUa2UjFHGb2FtdvEjM2RY/3ITQvmIeHUkkrhDwAhwx+B2z0SGAtwO0wCqGELrKimPxKBjmDJSZLc9/XaBFtgckIRkn7BhLOm/iGKKr9+8XYY+Wt068md4Ra3pDJZAPJurk+e426drDF/O3b9O5hLeN/MgAmI6XBm55TUPibZ7+nFyjiw3NJdztjy06MI2/9iTuL4qOvt+sJvsX1PF2IAICBmS4XY8unwt5fnMT97YVfwxl98eEQc4Ndetdq5WTZSQh/T69BFJkFB39QJmwjrdi1gN5xCCsuAZrEG4XDqhxQKZIDbt58V3q8YZmxLtFRA9FJcKRu+gpr2+nLZwBR6Bx4ZA7gFRf894TN4mIkKsW6Jb6+u2sE1tRIbqZY75CL+P8/JZ5DJLsegzBZ3F4wV2Dhbad/SONLMry4CKVQU637PNm3A6MXMKEXkOdYajvCE/bbCDIcKjyRlAGfcPyNbNoIxgedFDLPD0I8V+WXRgcEj14jEyoAJnNPd46ozGkoVZ2lFhsLS8UBtlO5LEiY6o46JdXImOfvomV5TjcKR4OHAAjabyUiNILA455Ems1pj9RDJ2pD8P6EBwUixUi8mHZb0vK7nzwsVqlBuzg6Gh6sPkVvHeTihyYF3Dv6khAMFnaxZsJMPqm3BrEtspidzwcHy3N4K5T/Md0PJVXpqRYIUxVzNEPx5xe2n2ZSj/vw15cNtvJxyTyZKu5EkCjfLgNsj9brCrMGnCAPkVUQXQNsW5/E1//ecYEVHBLVE5+fpTqoG7RSiASxvjWiYmpxOwheW91kA7kAQsdqEb+ZjvU/B3tmDNDSrLqNXr4AxNrrAnzuoqeqIGTRwhHy2vktKFXcPkuq5u1x7HUKCE3NKT8i9OfaSSKIA3l+lChSfXVZrQFSNdtaSYBqtduVVjGKT2Q+VU+BGmNhbQyEmYH8hDZ8Eug4uyZ8S+reIl/A0uHcpEURzxO/Y6oXUX2YrGZH700Oqnygs42tvXd+2+W9irTsSV/HT+1UnREV1ls9iVUaIas1BLRiM/oGsr/fMSzmHV8i3g+I0/Fo0BG30fEouVw9F7RI9iuWrvRv5cztFjQLAxjLQpJH3y1fM+MEtRrEodXyQDU8hKnRm1qY6k7W1Lc9F4w3GNFh6CIwbse7Mp8zufKuLUqkWj+PeHC2Oif30lydilCKsWWU5l4xHGuUTX8P9OytJBDQCPoBCjS0/MfEGd0Za7vMdQBIo5Bzg+BIx+AETJN6UhPDOOQ+zTx0iBetE+Sd9qjTsLdgKsYxjoftv5ravN4CxJuVoqaG0JnrFMqfg1cnjD5UEfCAp70NICY/sDfigsOlV/8GrhbOAn1mmgESWupRJrKnTCBCqxbW94SCCoHtXmG3cVyDgRMHBs/W9/brmtYxcEAttvEyZdGPDtcO1i8k1Vnz8I6eb9lod3zk0m92EQyvG2KtJSwYyGvhbUNjnt77mMy9ZixsBM8vG0BZh53Fx97aH7rigJz73Es33LEpDgQA/FkiYxMzq1+SZzxPpG5DfjX2cjX7geT9JNuM9gzRM5BSVEPqNr1VCmvUMnDUeG/+FhvB8cnTdPrINdFdbMLDIn1joW7HOG4h0XDBv7VZY0D7W7iUNEWuespvgB4Ag9bECdVkzifrruRNvR08Fkevq5ldDDZFoTjvkyyWMy43bRbgEY4Z2Z7VoJlK6sfXUkYV57HBTNLhFSrk6OS4p/sYlSPn9ViR1XXpkNS2es7plz/KY62LWO7L96byidWIZsRYm+XDfuZZyDHAZQ2N6xAXe41OJlw0Da5e0jvFaWjsIMJowE/yJCBXJYiRP1j3LKsgnMNUgoikgGVZhL3wcYrYKmQ+m+0Uq360mOwOggHf8YyHyZnql1BBdiT4Ku7EGt3ZKAbDRDYD2sVq9OCVnGF+rqfRiSsRtWRenN2cg7dlxWl54rcUhhPDAq4A3XI56FbXmY7PfTeiN7lpZOgQhORJxK8kaVcRhWAHxS5WSi2JNbES62gLbeBgGPkfjnYjtIe9q9NQC11n8nil8DfvKH+xo6OpV+SbDPuU+9DKXs1lrjN6H1AjWbE8LUR2QC4qbUjX+1Qy3SOqPZhb/rbmi+savet5RobqcOIMwRcAZ9YYtIaElzhbnvvTpT5Zz1n0AxUIxUjHCA0GtnwrxCMOpqGDa8GR81JPIH6WRtCLJRu4YuO+2DQIeEC738O/TodRw4GHbQju5SOJXlcLezgLmwY5ZE8m1q8dPJ87lgKHTlpcsKv10Ba6SH8TaHppE53s1ZUaaM1/WP8iYaLYi80FeIjspN54TFzUjDo/+dcf5pDZoktHlIXK6LlL20xcgQ/V6E58kIgQKKaWLcQnDLjmnJ9/R8aw9oIfwsTGWa4W1RxrDB4nhafWg0mM41ibWB5SbCOELiT682dZIPDzG3LQHd14Ip1q7J9e1Iy5OdZeUJux79ZqOi2YbHlMDPXqqJ5XNyLmqR8zVa4hz/QrdmXV1ZUSPnklufiFDhLb1k1MtF6D79BiWaOee5xOrYzkmQZ6HC6t3ZYkKDdi+aWDFE2AdDsqOh30bkZvj3hiMNi7yaaUh9NUebHWbA0g1b0w1R+1SZaB/uXwD43oqjLt+DbV16Wg/en2veuIS2BDMALMNR+9jGDiMN/LqPvMUD9pC3ISAG9mqvhMiuPVjI7Ui2Czn4uYapmlixhCdzjupj3YQyT4C6eh6KaCoJzZxVM7lKwKgtn5D8WFqowKfhjvPkKhH1oATzdoGqrW6cE4Ku7WNCP/gRbk3dRr7+8ZGdBuOfti8B8bfb7xmRl8JvvWZ3FJ5x4Q7thAfiPlgFYYyE1AtWI197GT6DFIEpIUSeU4nO9VCump2jwUgQYBa/1vUjQBw6Wiw1O6sy6q9ns+7DIt0Tolt9VAqy9rnQDKyFWCF0YkKnnKHgaUw/pSInFTKegdWLgPyO/l+czvS5PrO7xzgtKX+7s332BwOJHiQOHs8kk8tmpL36aJSe/121i4dlMZ24OE7yHm+SBK5lg3bbtXQ63edz8fCvP9joyAtbKj69rb9PYU+ylyclcMCqdn/NUPtxgAy6T2jDOU3as+NtcVZB8J2eImFX/ncoykluAuHpjz7MllC/cGUUuJacIIzWuiO+uxxk97z9x2LefLQkvEsDUu5kYjB9vPfeysFMdqwIWTDlMzkQrR2fnsmVMHmLfKUfyUtFZHLMUkbB2Cu6TTfNV4Mj7U3o+YOho8OX+QkRZyKhPL0UhTlngSTrDdXuEbdAaIhtZHkjXD/PFw6rPzjwt6FeqPi+EqR1x8mfru9N8zfcTyZ78e1E2VP8R1NYb5NjoK4eg3iTaR6KXZXacIsg8kYcl6/0Xt6I57XnCN7d8r3RmT3VZF3NxXjfHr2PvTv9+1c1xk4EJhX/vDkUWvkRKg16vazQOUkNeZfMz/HjTFW1BzUw6bxfSLl9P+oSGQU0Sm1HxpmdngdnNo+EgKKsCmJ3EB+yqEOii6KdXurYPulG19hPfjoLobY1xtdSj1i3vgCiOyJ+41/6vxDvTuENcoWdRc4AtWyZFUh6y/uv/2vI9xrpCH4qErnbmNOQjZk6SpwbG1iOAUgNQYsTxOW0HSC8KI1ZywTGW2QHzR6bt9KweaZYvBlzvzHy62ib6dIl+BqNLySsBfNGgTrZcDOPL6Ft+OP8ND+cWPqcSjZacbjHAhWxyDn8SJnXCsVpHUoANiN11Xr7ohl++DDz4sInFJyNekfd9MUrrxSyCVXbagW0JH8I3lVc0SK0mDDUzQWf8od7HUkDxIdJHlRxoDFVaZT5oaVEE8vIAp1MtUDiFAxAbp321jwFpLUlmcOi8EfhxvDbrc4SrAy7HchIWyUVj5bjaror0knv66M3WJhhKlIbD9Hge73tUguvuDsMkgbyZhPd33oESXnECPDV2l3vCOgSuDsRvPJGKrkAsQ6GBOcdRV/TJLgNr0K0yRCsnSoJNueMYiXsox0WVVPoygj6tTA0nyRsUxPK+dZOSlZk1DxlRRWH36ezEfohtlIYkIycy59l6xc7DCbEfw7gxAcDdE6laQMokA3RVPE3u6970eXGixh+Wpv4t8bAf8EQGppluCot0YZ2+S5XuUHhUZgg7ZS1WAJO9qXBElj6Ur7ecLybGyiiZgG7p4SQMRbn9QihppToAw26NZLElNOB2Wr73aXtWKIazu5LDyieiCQUMB3ysl6hnzAW+euGUeUj5EBm1sf4Rm22OTiPATKm9acVSe7jLwGlq74/h/aS3ETDVHeicIulu7D00E+230/67P6Puh0CtmW8aNBocwwlYIj7sogsuTS6Ny3tXyTcvOxPtVj2woYoWJQUvtgCh9cg2dYRhOGf+qX46K2F9Vy1yK58nv5KvvrENdMIJIhCcxw7I6BfAIogqZUs+/zZEF/Us6tAlXkHhzIuifCIYhKWzw/pOUf0NS2a71erUrSepgivMQ3YD/3jS5XHKdHE+LnFR+jZUDethb8ZEz5kBa2MaKXABKYY6PQfHAHmd2yYRdZDPjTLKZN7If40BQC7RS1xrZ2AYRELmri3kj1miD5gAin+vJBTI7UZMXBdrdpA6eHFowfjfBpwIal5spDmPe5IJnoB4hK+g0LQt1/jgd+eu8kvIFc/5PBMCHvTSKisz1pFYyWI65tT8TXU9+qxpO72K2qflbiE8A8wCkbq/xxsgXxoIJ/+nboRZ8sFBb1EzFqzTpjntUQ5eKq/J9K/Igi0YldWThvl0QDMoyt40z4DSajGCtGqk5XKm/v4zD3aWBMqWqgqGXMLsXhbk0SL4s1aU/nDEaXbDmQs8AWCa3kHUl7Hda6vIrNRnUb9TuXLhacZELmzU0+dgj5LgytKjY3urlkrLKaq/jI31xDYLLzXDtuAD5jj/KTIifYVgf87Xp9IkYnoAmGPU4pUBIOqzEf9DkBGJ0xsaS49WYk+9byU+e5RAEF9ETyWxUpxru7FqWA9gGHootDBY/68sM80sOJApUL3kmxrfOreVzZO8ltPpYovtJqyUb1iMf8yV/fLw2vtYhYT7/iFCl5E9l5ijHACX7fgnnbh1TkxiJjD62ioWRw9Wn5es0qrzDgStbQ7u2xV11UY0YLlrcfQyWUwn4RDcOIAyl6MqWwOrYXYf1j14sZQyGsjRFtnrZoykDzIRUmoAt08SjKnkJnMgXhX5Sw34wrpRRZLAfGYHGYoz1rDmYIGa5HVvN/YlGjMGbmG/c7o7AtWDF9tah51MBHAZ7kaycyoUfglDFoYgz/qSwAD586XA5yswHeStXLHgOrp/LpdDbQxM5xPjFXJrZQ4xm+UqTSDbFb2ZPaoWzuEMoSwSzmcDy79wRxPQ1szSOcaIiiILkoLlLJrn8/OVHQtsFdY8NB++CSyD7jLqgZMFVcKvkKSVeFf5uw7cgn3uWoWJSAYV2YJCJNQwRH20qdgwz8fE6MUTSZ9yORUrmg6XyfAg7hBOXyDDKnNKOe1rW3RO7ebyTLdqGhxYZgsAKYY9vQKpH1OHadGvH+Zdd5BMaf8NS24/ZFQ5INmS5gXzhpDa2ORwUe8Une3uVrv5WnYQs+3ov6ft3HPCdhs5oicmiEivIUqKnn78XKtvAJjZ9n4tKV1M4zqclK7ryVOBIrp1OagvDlObC4NxMy5+NgqDJnmqFgI+5vchluUQ+toMzp0VCAylI31ridtsrJpHUqAwED8wjez+xCYMK5Npa19GUvrqQ440Sf1ekErASlEE42vmFmnsb6L9C/mgTwh88AZ8eO/Ub9pC7JzTDfp0u9cHnPcestiZS8ZndLWsJGkgbZzT0zAUqR5mtp1xz186LNbJLB8GMj/kuGHOsLKExD6P92MPk9WkPNuggnbK8idLEtju+FvhLp2Pep5mc+338BeptTVg0mu69GT27j9wzKKU0UGraAm7BYW22BnyjGGrBNBrWiTuxrqBKJpN95huSSA+8C1/0E6y/8CD0uABBJq4JpWH6iFQva2CFpFNpWJ1e/IrjQaay54q/m+07Mm7jpSTeYQHusw7AXcNyppmMkJLElGFeJhV8OYXIWzfu/ptTmAnVRqKprV+DGFYWKk9k3EFfzQYJ9ma1rfi1uYGdyogQfj5oCqj7sY1Uw7QOPYuhQEw4JvwnfNT0RTetYwn1l12dz4EucSo55Zve6K6Tpla8x+t0iDp7jK5Ij2JdcUlfw3+4iYLi01Slrug9Mst4MlDZ9QjbHF+WW4YiPaSqZpzRqEvKmmEuJQY4WCJyJ2pB9N6cGc9l/g6qe8lCgQe0kpxnDGjBTAjN0yWfD9JNZVYLsgtiFxJv/8DpyknI+rmBNiDtREdlNUo1741xgLqK56BExliAzecgtX7XaPMu0Ax97TmkcSbTb5fnL4AdMzLChwrfJx+6ipzh6zVIpJItrtOChB8YKfUyp29SBB1+JFq36oP8KGgu0gZAv3sdYlO/H2FgPTK61pUNNWKAQSFadPNgdxanz0sppBERf5TOVlPoPUO8cuFbBCrC6zBE50sg2Kuer3bCadpnpWyvS4axu9p8UxdLgfy44ERtgnJJps2r1D0Zwh/UmOv87MLXOc96c6W7hHv+SrgDLPb0dhahePywN3EUr9OOzaMwo17ysrZFc679i8f9Y+5MTjdm0hdLnOo831nBUq++6yhRYEZZt1uz7rT/xjPoamymhZuMSylXZt6kAjIV5hImOT/MgYoEPzlo7f6tcQUd305ySpf83iT2LR0QbMVt+WP/9MFZpsUQhGGb1aKExz+VAhvK7cK01JwsQSIOfZX/O1QJ5QtoRWT4l8exAbqkgZ5ViZ/EzDzAdY+xYzPXc+9LBdaya+n+zOs9ryG0zg4V5IGHDu+QfxcwYJ0q7MjeeyGEQ1eHl1RZkejM0CyP/MEk9Z+wBz5Ok0SLy8+jT9vHSTyjPo0w3IJNL3R/dunt63sM63IDYYbATlW84FbIL/nT7WQIrZTIftvp+WuaEqD5DpjAKYcCRQflSQgxPoNNu0tDyv8qZgq6HOq8yoNGJDgczcux00bt7cKQSmJyG7WBAk/82G9rAjnaNM7IYpe/aTRhTbcjrETmPgNyorR5+3G0Pvn3PRrGnv4w/N5DsKPKopFlvxwqXcuD7dljOhcXuRYX8nvjVblLos9+Ht5slpzpDAbwb5BkBAqrtbzFB83Xc8zx/xim23wSxLZQAN5ZlFPzCFdwrq7lTS6vM9gEm3QpHtkLc51OMF25asdpk53I75sr8Oz+4etQxKDT9tS4KYJ00V1JZ047rdh2XJ5ggOku6mGjZp/XEbUXjDjVWDhf7pFGfIofljnqrfzmfxfB1whw0LiJlvX7Q+reZyYksDGNMZwBFAHKrmU3/2SxuJRpue7+yY0i9etTt1nLfwJENEooMa0KY5QyYN79FQSDqlOaHTHmzmI5BwNMSK1ZPEiZf6VoF/5dFxBJoOOxu/9RwxcF1Guq+nAGoqYH+tMkKyd85pTTQy/wH/0DdevvvWKs5H1Bfl+akue0uiYDQi1AlGbqy2AeRn1Ohaf/fitrWyjUrS2nQBUPtxieRodtkQ+Ayav2PouLaYY38Ax6d4WkCQRxX2uUZFSbMMJPdK+/VTxZlYl4Drc4hHM4z8ONKOK3ofAmPv0ZtuOWAgXCw69RCW+Ak2UGgeHGw+tWaPKCR6bXkEJ30qftt3/LPd8G1OiXL8vPLmwwMz4EDWl1IcQwKkv1yfB6l/x3VZULeiyR95WU+TqhVwUo7jEs4iXPzIIE5D5eRQdgXdCWcbJBV7yo24xkHcdcPtLc5KzArkz3bpusOORYAATbEj66fo0ayvS/46imdMuFuYKw8cLmWeNeolfg8i47hhChswmvcJZLO2nS5wx6tFuk41VWv11OHYq31yTs56czJEC1w+Et6plj71N7F7rfJUahyNDr4fnuPYjItYTvS2bpOyTmWQLfs90BLTYmjEXolummvBTJzcMa5NMMXTifmWE4lMt8MUqJfm53k+U9u6qSaRTLtz48xHH65jUqlMdXcMoq61wT0KCQmlWuBB2HojqiBnNESYoRqn+K7T0Oth+lXZssegH7GNO2Vx0UuOGdy+YO8aU7SkoULz1KQ/LFx+QKEjSRMnfN1b5qbrdCj88GtvOKMku+MY8pf1NZLF5SdZDcw90UcuG5JVARl7zRwTYdn8FBSf1w/5pr2OfaXnKsBs6y+cXBNIh2AdjFzlEwZ8aEaC/HTa2SMSL84iFvMAtaoXsoRwucFuZj4c8exUh5VLQADUmErKMCSt/hjjeT8EKrpjMzoATOOIA+QiC6fRSBq+yhwMpcUVsc1buafHvU1qsWJ/Uzyrf9KAn6MXTm0QphBb50yk2G9pmsGCmjxAFDhOeJ1PQB3tlqEdDxbRk7steRcPCiWScHmMOhbvd0kycuee7QWR0rfieKbGqEZsbgwT6ai9v7ETIfeZnPXdRb1tsj8698DiDEetcOaUE6EI0KzwW7bj3hWOm+WIn+ZOgD4AOACCausnh/PgRhnIM2vtGi2UNteikg8lKyELLs/PPacvAgok3QIvQaRFpdg9rqPxNMBYpkkvuknmCrq+HHVZnnotCFHVlf/RtyDu2nqJy0+/H8PAx+pQ3/TK9xQmeKfivTXVmJUmb6KnpUB2+556bbTMQb6VY9WdP4r5te+8EwqSSHpKT1XMs5cUfZaVLOW0QuAMBKcsNDo30k0FTeOlGsluE49nUFOtCqiCuMFyMRnv/BftoeyQLZEmLBw32/czZhrimp/O9gnqS1wqs8+vuEnl0sT9Gnt5eOIilSmmFXRJHCYLyj2s8dDAv+oX96t1Jjiv3ywkKtgt/UUBl0se0YiRipJGbtHvzSQVq8n7qQFh7GXErbek4JiM7/nnsFMh1KX3WXYpCZNEnGvP0mieVIY6QA9uR3++KdQA0WW2GVFTMVkZPPTHj+cAOr/tE1vs23M2uTcb4NMI53LGBiFc/Co33a96bxBOQwA7i0yMQmMASyMhN6lY9qIMClibRZSRhT4qc1ps1CRgrhjT5wi5VBY+auWcYqvJqYRHVRc7X8VVomacYLz4XrwfVIDYKXcsXjzhorPxGUiMayyyDhAXjzr3mVck6ze5pzhP7E7NWJLZa+To4w1EpN5GBcH2P9gU64vdTsPk4FFk8j1q6cklRWkShmxXt9EbMVDjSR9IzYCj5Q/LJJ+VTkZtQ/SedoBnc7bSSmbRl2QTHsKK3Wij4AMb7XalCy8vHlwh0Pf5ecs6qWc1BqtP71U64wvHqE6maNhOsUq6NVwjOT0OsK0hA1oR44Z0KXQoLbjM4gYYVefAIHXueNrVC8jSQ4Lo8Vj6Bm83klGP+Aoi8a53Fh4WeyIkqLhVGHYrtojZ3d4Abhg2BmYFRCuSRTmISCNuKRWeEtjXPr16CJ6pJ93FrLgIsqP86mvrUCE14UmdXUYV52wVW22HFp4QrDjPfLy++8jOwCYWiG0cAfqAtzgaOSGWwibTYWPbK1CKScMd9Rqnk4hdS0xPfG1aZyzQ5Os8Xunwk58Zp4XJrhodQ3of8GVW7kmX7qtGG3WCPCZb5M0+rEvKj7fXThzSbJ6l4zp7d67AxvtmGl87OYOVhXUf9Bs6cSw5HyS+69a7AXoKFmXl1NrbBLnoDjjYcJ7gz8cgd4Rr0ShUrcYt7Dacn+/UfzQHWVJEZayWzgPPHrcAlMdlt+kGyox878HqxQwL2IL7F86xWnBgSgQv0z+VuWK1kDQazFJBsJ+9L7EdvYlSOJ5HeLzawN2bAY8sF9qR3VLG1txYcRk3Fl1mHVrqjW8RlmSYacsajlYYkB/xHgE45yrwPxOUZHIQwJCr3LQlnMl6ITfsIpsvmaeFKksdv1icn3rFijH/cqQu+OjOcKYUo9K0jfndaGNgmClipW85RuVbXWjOZzARFF6oc0d52ogrCnrC2U8YuBEvpdAIeOor1lGrrLODP0Q8EkelwPQOaVwiDM3a5pNrOOlpV8KFRjjPYl+QPXjVgw4wxESVYpS9S1XdMreULthjC7aJNif+Y1NGvUHFikFgjGvP1GWDAZCPnOnOCpgrJHar4Oka/nptiLNY6dE7EI6zVhBOYcnZ7EcyMpb9LK9LAC9iGCV3o0b9USlQWFEpUMIkeuTruoESVlvU8UOKKi7spR6giEFoaHCVsXzNfY/P19E0YDTjP3IrRdUtStfj+gMMKxjMNfwkbCmnm0FuQ7GDrgJFHXrfHEHCLQYox9olNlJaXuSynRhT8/8/wXlejqnaffdOpubDKS3xYxIlhWnE"}</script></main> </div> </div>  </div> </div>  </body></html>

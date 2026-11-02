@@ -1,18 +1,29 @@
 # NEOMORPHIC™ (neomorphic.si) — Hostinger LiteSpeed / Apache / Trinity configuration
 Options -Indexes
+ServerSignature Off
 RewriteEngine On
+
+# Restrict HTTP methods to read-only static methods (GET, HEAD, OPTIONS)
+RewriteCond %{REQUEST_METHOD} !^(GET|HEAD|OPTIONS)$ [NC]
+RewriteRule ^ - [R=405,L]
 
 # Block access to hidden files and directories (.git, .DS_Store, .htaccess, .nojekyll, etc.)
 RewriteRule ^(?:.*/)?\. - [F,L]
 
-# Hide internal development styleguide in production
-RewriteRule ^styleguide(?:/.*)?$ - [R=404,L]
+# Hide internal development styleguide and Cloudflare _headers file on Apache/LiteSpeed
+RewriteRule ^(?:styleguide(?:/.*)?|_headers)$ - [R=404,L]
 
 # Force HTTPS and canonical apex domain (www.neomorphic.si -> neomorphic.si)
 RewriteCond %{HTTP_HOST} ^www\.neomorphic\.si$ [NC,OR]
 RewriteCond %{HTTPS} !=on
 RewriteCond %{HTTP_HOST} ^(?:www\.)?(.+)$ [NC]
 RewriteRule ^ https://%1%{REQUEST_URI} [L,R=301]
+
+# Protect /docs-media/* against external hotlinking and direct off-site scraping
+RewriteCond %{REQUEST_URI} ^/docs-media/ [NC]
+RewriteCond %{HTTP_REFERER} !^https?://(www\.)?neomorphic\.si/ [NC]
+RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1)(:[0-9]+)?$ [NC]
+RewriteRule ^ - [F,L]
 
 # Custom 404 page
 ErrorDocument 404 /404.html
@@ -25,13 +36,22 @@ ErrorDocument 404 /404.html
   Header always set Referrer-Policy "strict-origin-when-cross-origin"
   Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
   Header always set Cross-Origin-Opener-Policy "same-origin"
-  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests"
+  Header always set Cross-Origin-Resource-Policy "same-origin"
+  Header always set X-Permitted-Cross-Domain-Policies "none"
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests"
   Header always unset X-Powered-By
   Header unset X-Powered-By
 
-  # Prevent search indexing of protected docs, media, and search index
-  <If "%{REQUEST_URI} =~ m#^/(docs|docs-media|pagefind)(/|$)#">
+  # Prevent search indexing and shared-proxy caching of encrypted /docs/* pages
+  <If "%{REQUEST_URI} =~ m#^/(docs|pagefind)(/|$)#">
     Header always set X-Robots-Tag "noindex, nofollow, noarchive"
+    Header always set Cache-Control "private, no-store, no-cache, must-revalidate"
+  </If>
+
+  # Mark /docs-media/* as private so shared CDN/proxy caches do not store protected briefings
+  <If "%{REQUEST_URI} =~ m#^/docs-media(/|$)#">
+    Header always set X-Robots-Tag "noindex, nofollow, noarchive"
+    Header always set Cache-Control "private, max-age=3600"
   </If>
 </IfModule>
 
@@ -44,7 +64,7 @@ ErrorDocument 404 /404.html
   AddType font/woff2 .woff2
 </IfModule>
 
-# Long-term cache for immutable hashed assets & media
+# Long-term cache for immutable hashed assets & public media
 <IfModule mod_expires.c>
   ExpiresActive On
   ExpiresByType text/html "access plus 0 seconds"

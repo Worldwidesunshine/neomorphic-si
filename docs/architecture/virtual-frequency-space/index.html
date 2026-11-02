@@ -112,11 +112,15 @@
 		font-size: 0.95rem;
 		font-weight: 600;
 		cursor: pointer;
-		transition: transform 0.15s ease, box-shadow 0.2s ease;
+		transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s ease;
 	}
-	.neo-gate__btn:hover {
+	.neo-gate__btn:hover:not(:disabled) {
 		box-shadow: 0 0 28px rgba(168, 216, 248, 0.45);
 		transform: translateY(-1px);
+	}
+	.neo-gate__btn:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
 	}
 	.neo-gate__error {
 		font-family: 'Avenir Next', 'Inter Variable', 'Inter', sans-serif;
@@ -173,28 +177,110 @@
 		};
 	})();
 
-	// Sovereign Documentation Access Gate (Salted SHA-256 verification)
+	// Sovereign Documentation Access Gate (PBKDF2-HMAC-SHA256 310,000 iterations + AES-256-GCM payload decryption)
 	(() => {
-		const STORAGE_KEY = 'neo_docs_auth_v1';
-		const EXPECTED_HASH = 'da43f9f15396ade683ccd8011b271bbaae599b9554c48418d58601c2eca2403f';
-		const SALT = ':neomorphic-ssii-2026';
+		const KEY_STORAGE = 'neo_docs_key_v2';
+		const FAILS_STORAGE = 'neo_docs_fails_v2';
+		const LOCK_STORAGE = 'neo_docs_lock_until_v2';
+		const PBKDF2_SALT = 'neomorphic-ssii-2026-pbkdf2-v2';
+		const PBKDF2_ITERS = 310000;
+		// SHA-256(PBKDF2-derived 256-bit key) — one-way verifier; cannot decrypt AES-256-GCM payload without password
+		const EXPECTED_VERIFIER = 'ed2016881993578201b591676b960ab6c50cd92c6c07a92e22782eedbef7e838';
 
-		try {
-			if (sessionStorage.getItem(STORAGE_KEY) === EXPECTED_HASH) {
-				document.documentElement.setAttribute('data-neo-unlocked', 'true');
-				return;
+		function bytesToHex(bytes) {
+			return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+		}
+
+		function hexToBytes(hex) {
+			const out = new Uint8Array(hex.length / 2);
+			for (let i = 0; i < out.length; i++) {
+				out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
 			}
-		} catch {}
+			return out;
+		}
 
-		async function sha256Hex(str) {
-			const buf = new TextEncoder().encode(str);
-			const digest = await crypto.subtle.digest('SHA-256', buf);
-			return Array.from(new Uint8Array(digest))
-				.map((b) => b.toString(16).padStart(2, '0'))
-				.join('');
+		function b64ToBytes(b64) {
+			const bin = atob(b64);
+			const out = new Uint8Array(bin.length);
+			for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+			return out;
+		}
+
+		async function deriveKeyBytes(password) {
+			const enc = new TextEncoder();
+			const baseKey = await crypto.subtle.importKey(
+				'raw',
+				enc.encode(password),
+				'PBKDF2',
+				false,
+				['deriveBits']
+			);
+			const bits = await crypto.subtle.deriveBits(
+				{
+					name: 'PBKDF2',
+					salt: enc.encode(PBKDF2_SALT),
+					iterations: PBKDF2_ITERS,
+					hash: 'SHA-256',
+				},
+				baseKey,
+				256
+			);
+			return new Uint8Array(bits);
+		}
+
+		async function sha256HexBytes(bytes) {
+			const digest = await crypto.subtle.digest('SHA-256', bytes);
+			return bytesToHex(new Uint8Array(digest));
+		}
+
+		async function decryptAndMount(keyBytes) {
+			const payloadEl = document.getElementById('neo-encrypted-main');
+			if (payloadEl) {
+				const data = JSON.parse(payloadEl.textContent || '{}');
+				const aesKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+				const plainBuf = await crypto.subtle.decrypt(
+					{ name: 'AES-GCM', iv: b64ToBytes(data.iv) },
+					aesKey,
+					b64ToBytes(data.ct)
+				);
+				const html = new TextDecoder().decode(plainBuf);
+				const mainEl = payloadEl.closest('main') || document.querySelector('main');
+				if (mainEl) {
+					mainEl.innerHTML = html;
+					mainEl.querySelectorAll('video, audio').forEach((media) => {
+						media.addEventListener('contextmenu', (e) => e.preventDefault());
+					});
+				}
+			}
+			document.documentElement.setAttribute('data-neo-unlocked', 'true');
+			const gate = document.getElementById('neo-auth-gate');
+			if (gate) gate.remove();
+		}
+
+		async function tryAutoUnlock() {
+			try {
+				const savedHex = sessionStorage.getItem(KEY_STORAGE);
+				if (!savedHex || savedHex.length !== 64) return false;
+				const keyBytes = hexToBytes(savedHex);
+				const verifier = await sha256HexBytes(keyBytes);
+				if (verifier !== EXPECTED_VERIFIER) {
+					sessionStorage.removeItem(KEY_STORAGE);
+					return false;
+				}
+				const run = () => decryptAndMount(keyBytes).catch(() => sessionStorage.removeItem(KEY_STORAGE));
+				if (document.readyState === 'loading') {
+					document.addEventListener('DOMContentLoaded', run, { once: true });
+				} else {
+					await run();
+				}
+				return true;
+			} catch {
+				return false;
+			}
 		}
 
 		function mountGate() {
+			if (document.documentElement.getAttribute('data-neo-unlocked') === 'true') return;
 			if (document.getElementById('neo-auth-gate')) return;
 			const gate = document.createElement('div');
 			gate.id = 'neo-auth-gate';
@@ -209,7 +295,7 @@
 					</div>
 					<h1 class="neo-gate__title" id="neo-gate-title">Enter Access Password</h1>
 					<p class="neo-gate__desc">
-						Technical architecture, verified benchmarks, and sovereign briefing materials require authorized access.
+						Technical architecture, verified benchmarks, and sovereign briefing materials are encrypted with AES-256-GCM and require authorized access.
 					</p>
 					<form class="neo-gate__form" id="neo-gate-form" autocomplete="off">
 						<div class="neo-gate__input-wrap">
@@ -223,11 +309,11 @@
 								aria-label="Documentation password"
 							/>
 						</div>
-						<button type="submit" class="neo-gate__btn">Unlock Documentation</button>
+						<button type="submit" id="neo-gate-submit" class="neo-gate__btn">Unlock Documentation</button>
 						<p class="neo-gate__error" id="neo-gate-error" role="alert" aria-live="polite"></p>
 					</form>
 					<div class="neo-gate__footer">
-						<span>SSII Architecture</span>
+						<span>SSII Architecture · AES-256-GCM</span>
 						<a href="/" class="neo-gate__back">← Return to neomorphic.si</a>
 					</div>
 				</div>
@@ -236,54 +322,88 @@
 
 			const form = document.getElementById('neo-gate-form');
 			const input = document.getElementById('neo-gate-input');
+			const submitBtn = document.getElementById('neo-gate-submit');
 			const errorEl = document.getElementById('neo-gate-error');
 			setTimeout(() => input && input.focus(), 50);
 
+			function checkLockout() {
+				try {
+					const until = Number(sessionStorage.getItem(LOCK_STORAGE) || '0');
+					const rem = Math.ceil((until - Date.now()) / 1000);
+					if (rem > 0) {
+						submitBtn.disabled = true;
+						input.disabled = true;
+						errorEl.textContent = `Too many failed attempts. Please wait ${rem}s before retrying.`;
+						setTimeout(checkLockout, 1000);
+						return true;
+					} else if (submitBtn.disabled) {
+						submitBtn.disabled = false;
+						input.disabled = false;
+						errorEl.textContent = '';
+						input.focus();
+					}
+				} catch {}
+				return false;
+			}
+			checkLockout();
+
 			form.addEventListener('submit', async (e) => {
 				e.preventDefault();
+				if (checkLockout()) return;
 				const raw = (input.value || '').trim().toLowerCase();
 				if (!raw) return;
-				const hash = await sha256Hex(raw + SALT);
-				if (hash === EXPECTED_HASH) {
-					try { sessionStorage.setItem(STORAGE_KEY, EXPECTED_HASH); } catch {}
-					document.documentElement.setAttribute('data-neo-unlocked', 'true');
-					gate.remove();
-				} else {
-					errorEl.textContent = 'Invalid access password. Please try again.';
-					input.value = '';
-					input.focus();
+				submitBtn.disabled = true;
+				try {
+					const keyBytes = await deriveKeyBytes(raw);
+					const verifier = await sha256HexBytes(keyBytes);
+					if (verifier === EXPECTED_VERIFIER) {
+						try {
+							sessionStorage.setItem(KEY_STORAGE, bytesToHex(keyBytes));
+							sessionStorage.removeItem(FAILS_STORAGE);
+							sessionStorage.removeItem(LOCK_STORAGE);
+						} catch {}
+						await decryptAndMount(keyBytes);
+					} else {
+						let fails = 1;
+						try {
+							fails = Number(sessionStorage.getItem(FAILS_STORAGE) || '0') + 1;
+							sessionStorage.setItem(FAILS_STORAGE, String(fails));
+							if (fails >= 3) {
+								const delaySec = Math.min(60, 5 * Math.pow(2, fails - 3));
+								sessionStorage.setItem(LOCK_STORAGE, String(Date.now() + delaySec * 1000));
+							}
+						} catch {}
+						submitBtn.disabled = false;
+						if (!checkLockout()) {
+							errorEl.textContent = 'Invalid access password. Please try again.';
+							input.value = '';
+							input.focus();
+						}
+					}
+				} catch {
+					submitBtn.disabled = false;
+					errorEl.textContent = 'Unable to verify credentials. Please try again.';
 				}
 			});
 		}
 
-		if (document.body) {
-			mountGate();
-		} else {
-			document.addEventListener('DOMContentLoaded', mountGate);
-		}
+		tryAutoUnlock().then((unlocked) => {
+			if (!unlocked) {
+				if (document.body) mountGate();
+				else document.addEventListener('DOMContentLoaded', mountGate, { once: true });
+			}
+		});
 	})();
 </script><template id="theme-icons"><svg aria-hidden="true" class="light astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"/></svg><svg aria-hidden="true" class="dark astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"/></svg><svg aria-hidden="true" class="auto astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg></template><link rel="stylesheet" href="/_astro/print.DNXP8c50.css" media="print"><style>@font-face{font-family:LT Institute;src:url(/fonts/LTInstitute-1.otf) format("opentype");font-weight:100 900;font-style:normal;font-display:swap}:root{--bg-lavender: #f1eef8;--bg-mist: #e7e2f3;--bg-veil: rgba(255, 255, 255, .55);--ink: #0c0b14;--ink-2: #15131f;--ink-3: #1e1b2c;--white: #ffffff;--pastel-blue: #a8d8f8;--pastel-purple: #c9b8f6;--periwinkle: #8e9cff;--signal-mint: #9ef0d8;--mint: #9ef0d8;--text: #16141f;--text-muted: #5b566e;--text-on-ink: #eceaf5;--text-on-ink-muted: #a29fb8;--line: rgba(22, 20, 31, .1);--line-on-ink: rgba(201, 184, 246, .18);--glow-blue: 0 0 24px rgba(168, 216, 248, .45);--glow-purple: 0 0 24px rgba(201, 184, 246, .45);--aurora: radial-gradient(60% 50% at 20% 20%, rgba(168, 216, 248, .55), transparent 70%), radial-gradient(50% 45% at 80% 30%, rgba(201, 184, 246, .6), transparent 70%), radial-gradient(60% 60% at 50% 100%, rgba(142, 156, 255, .25), transparent 70%);--ink-panel: linear-gradient(160deg, #15131f 0%, #0c0b14 60%, #121025 100%);--font-display: "LT Institute", "Avenir Next", "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;--font-body: "LT Institute", "Avenir Next", "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;--font-sans: "LT Institute", "Avenir Next", "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;--font-mono: "LT Institute", "Avenir Next", "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;--font-code: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;--fs-xs: clamp(.75rem, .72rem + .1vw, .8rem);--fs-sm: clamp(.875rem, .85rem + .1vw, .95rem);--fs-md: clamp(1rem, .97rem + .15vw, 1.1rem);--fs-lg: clamp(1.25rem, 1.1rem + .6vw, 1.6rem);--fs-xl: clamp(1.75rem, 1.4rem + 1.5vw, 2.75rem);--fs-2xl: clamp(2.5rem, 1.8rem + 3vw, 4.75rem);--space-1: .25rem;--space-2: .5rem;--space-3: 1rem;--space-4: 1.5rem;--space-5: 2.5rem;--space-6: 4rem;--space-7: 6rem;--space-8: 9rem;--radius-sm: 8px;--radius-md: 14px;--radius-lg: 24px;--container: 1240px;--ease-out: cubic-bezier(.16, 1, .3, 1);--nav-h: 64px;--nav-top: 14px;--grid-line: rgba(22, 20, 31, .055);--grid-line-on-ink: rgba(201, 184, 246, .07);--grid-size: 48px;--tick-color: rgba(22, 20, 31, .38);--tick-color-on-ink: rgba(201, 184, 246, .55);--text-accent: #5a4fcf;--shadow-soft: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 20px 50px -24px rgba(44, 36, 112, .25);--shadow-ink: 0 30px 80px -30px rgba(12, 11, 20, .6)}
 </style>
-<link rel="stylesheet" href="/_astro/index.CoYKx0xL.css">
+<link rel="stylesheet" href="/_astro/index.D9pM1j2i.css">
 <style>@layer starlight.components{:root{--sl-badge-default-border: var(--sl-color-accent);--sl-badge-default-bg: var(--sl-color-accent-low);--sl-badge-default-text: #fff;--sl-badge-note-border: var(--sl-color-blue);--sl-badge-note-bg: var(--sl-color-blue-low);--sl-badge-note-text: #fff;--sl-badge-danger-border: var(--sl-color-red);--sl-badge-danger-bg: var(--sl-color-red-low);--sl-badge-danger-text: #fff;--sl-badge-success-border: var(--sl-color-green);--sl-badge-success-bg: var(--sl-color-green-low);--sl-badge-success-text: #fff;--sl-badge-caution-border: var(--sl-color-orange);--sl-badge-caution-bg: var(--sl-color-orange-low);--sl-badge-caution-text: #fff;--sl-badge-tip-border: var(--sl-color-purple);--sl-badge-tip-bg: var(--sl-color-purple-low);--sl-badge-tip-text: #fff}[data-theme=light]:root{--sl-badge-default-bg: var(--sl-color-accent-high);--sl-badge-note-bg: var(--sl-color-blue-high);--sl-badge-danger-bg: var(--sl-color-red-high);--sl-badge-success-bg: var(--sl-color-green-high);--sl-badge-caution-bg: var(--sl-color-orange-high);--sl-badge-tip-bg: var(--sl-color-purple-high)}.sl-badge:where(.astro-avdet4wd){display:inline-block;border:1px solid var(--sl-color-border-badge);border-radius:.25rem;font-family:var(--sl-font-system-mono);line-height:normal;color:var(--sl-color-text-badge);background-color:var(--sl-color-bg-badge);overflow-wrap:anywhere}.sidebar-content .sl-badge:where(.astro-avdet4wd){line-height:1;font-size:var(--sl-text-xs);padding:.125rem .375rem}.sidebar-content a[aria-current=page]>.sl-badge:where(.astro-avdet4wd){--sl-color-bg-badge: transparent;--sl-color-border-badge: currentColor;color:inherit}.default:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-default-bg);--sl-color-border-badge: var(--sl-badge-default-border);--sl-color-text-badge: var(--sl-badge-default-text)}.note:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-note-bg);--sl-color-border-badge: var(--sl-badge-note-border);--sl-color-text-badge: var(--sl-badge-note-text)}.danger:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-danger-bg);--sl-color-border-badge: var(--sl-badge-danger-border);--sl-color-text-badge: var(--sl-badge-danger-text)}.success:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-success-bg);--sl-color-border-badge: var(--sl-badge-success-border);--sl-color-text-badge: var(--sl-badge-success-text)}.tip:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-tip-bg);--sl-color-border-badge: var(--sl-badge-tip-border);--sl-color-text-badge: var(--sl-badge-tip-text)}.caution:where(.astro-avdet4wd){--sl-color-bg-badge: var(--sl-badge-caution-bg);--sl-color-border-badge: var(--sl-badge-caution-border);--sl-color-text-badge: var(--sl-badge-caution-text)}.small:where(.astro-avdet4wd){font-size:var(--sl-text-xs);padding:.125rem .25rem}.medium:where(.astro-avdet4wd){font-size:var(--sl-text-sm);padding:.175rem .35rem}.large:where(.astro-avdet4wd){font-size:var(--sl-text-base);padding:.225rem .45rem}.sl-markdown-content :is(h1,h2,h3,h4,h5,h6) .sl-badge:where(.astro-avdet4wd){vertical-align:middle}}
 @layer starlight.components{.card-grid:where(.astro-zntqmydn){display:grid;grid-template-columns:100%;gap:1rem}.card-grid:where(.astro-zntqmydn)>*{margin-top:0!important}@media(min-width:50rem){.card-grid:where(.astro-zntqmydn){grid-template-columns:1fr 1fr;gap:1.5rem}.stagger:where(.astro-zntqmydn){--stagger-height: 5rem;padding-bottom:var(--stagger-height)}.stagger:where(.astro-zntqmydn)>*:nth-child(2n){transform:translateY(var(--stagger-height))}}}
 @layer starlight.components{svg:where(.astro-c6vsoqas){color:var(--sl-icon-color);font-size:var(--sl-icon-size, 1em);width:1em;height:1em}}
 @layer starlight.components{.sl-link-card:where(.astro-mf7fz2mj){display:grid;grid-template-columns:1fr auto;gap:.5rem;border:1px solid var(--sl-color-gray-5);border-radius:.5rem;padding:1rem;box-shadow:var(--sl-shadow-sm);position:relative}a:where(.astro-mf7fz2mj){text-decoration:none;line-height:var(--sl-line-height-headings)}a:where(.astro-mf7fz2mj):before{content:"";position:absolute;inset:0}.stack:where(.astro-mf7fz2mj){flex-direction:column;gap:.5rem}.title:where(.astro-mf7fz2mj){color:var(--sl-color-white);font-weight:600;font-size:var(--sl-text-lg)}.description:where(.astro-mf7fz2mj){color:var(--sl-color-gray-3);line-height:1.5}.icon:where(.astro-mf7fz2mj){color:var(--sl-color-gray-3)}.sl-link-card:where(.astro-mf7fz2mj):hover{background:var(--sl-color-gray-7, var(--sl-color-gray-6));border-color:var(--sl-color-gray-2)}.sl-link-card:where(.astro-mf7fz2mj):hover .icon:where(.astro-mf7fz2mj){color:var(--sl-color-white)}}
 @layer starlight.components{.sl-steps{--bullet-size: calc(var(--sl-line-height) * 1rem);--bullet-margin: .375rem;list-style:none;counter-reset:steps-counter var(--sl-steps-start, 0);padding-inline-start:0}.sl-steps>li{counter-increment:steps-counter;position:relative;padding-inline-start:calc(var(--bullet-size) + 1rem);padding-bottom:1px;min-height:calc(var(--bullet-size) + var(--bullet-margin))}.sl-steps>li+li{margin-top:0}.sl-steps>li:before{content:counter(steps-counter);position:absolute;top:0;inset-inline-start:0;width:var(--bullet-size);height:var(--bullet-size);line-height:var(--bullet-size);font-size:var(--sl-text-xs);font-weight:600;text-align:center;color:var(--sl-color-white);background-color:var(--sl-color-gray-6);border-radius:99rem;box-shadow:inset 0 0 0 1px var(--sl-color-gray-5)}.sl-steps>li:after{--guide-width: 1px;content:"";position:absolute;top:calc(var(--bullet-size) + var(--bullet-margin));bottom:var(--bullet-margin);inset-inline-start:calc((var(--bullet-size) - var(--guide-width)) / 2);width:var(--guide-width);background-color:var(--sl-color-hairline-light)}}@layer starlight.content{.sl-steps>li>:first-child{--lh: calc(1em * var(--sl-line-height));--shift-y: calc(.5 * (var(--bullet-size) - var(--lh)));transform:translateY(var(--shift-y));margin-bottom:var(--shift-y)}.sl-steps>li>:first-child:where(h1,h2,h3,h4,h5,h6){--lh: calc(1em * var(--sl-line-height-headings))}@supports (--prop: 1lh){.sl-steps>li>:first-child{--lh: 1lh}}}
 @layer starlight.components{.sl-link-button:where(.astro-xwgiixxa){align-items:center;border:1px solid transparent;border-radius:999rem;display:inline-flex;font-size:var(--sl-text-sm);gap:.5em;line-height:1.1875;outline-offset:.25rem;padding:.4375rem 1.125rem;text-decoration:none}.sl-link-button:where(.astro-xwgiixxa).primary{background:var(--sl-color-text-accent);border-color:var(--sl-color-text-accent);color:var(--sl-color-black)}.sl-link-button:where(.astro-xwgiixxa).primary:hover{color:var(--sl-color-black)}.sl-link-button:where(.astro-xwgiixxa).secondary{border-color:inherit;color:var(--sl-color-white)}.sl-link-button:where(.astro-xwgiixxa).minimal{color:var(--sl-color-white);padding-inline:0}.sl-link-button:where(.astro-xwgiixxa) svg{flex-shrink:0}@media(min-width:50rem){.sl-link-button:where(.astro-xwgiixxa){font-size:var(--sl-text-base);padding:.9375rem 1.25rem}}.sl-markdown-content .sl-link-button:where(.astro-xwgiixxa){margin-inline-end:1rem}.sl-markdown-content .sl-link-button:where(.astro-xwgiixxa):not(:where(p *)){margin-block:1rem}}
-</style><script type="module" src="/_astro/page.B1D-nYk3.js"></script></head> <body class="astro-bguv2lll"> <a href="#_top" class="astro-7q3lir66">Skip to content</a>  <div class="page sl-flex astro-vrdttmbt"> <header class="header astro-vrdttmbt"><div class="header astro-kmkmnagf"> <div class="title-wrapper sl-flex astro-kmkmnagf"> <a href="/" class="site-title sl-flex astro-m46x6ez3">  <span class="astro-m46x6ez3" translate="no"> NEOMORPHIC™ Docs </span> </a>  </div> <div class="sl-flex print:hidden astro-kmkmnagf"> <site-search class="astro-kmkmnagf astro-v37mnknz" data-translations="{&#34;placeholder&#34;:&#34;Search&#34;}"> <button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-v37mnknz"> <svg aria-hidden="true" class="astro-v37mnknz astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"/></svg> <span class="sl-hidden md:sl-block astro-v37mnknz" aria-hidden="true">Search</span> <kbd class="sl-hidden md:sl-flex astro-v37mnknz" style="display: none;"> <kbd class="astro-v37mnknz">Ctrl</kbd><kbd class="astro-v37mnknz">K</kbd> </kbd> </button> <dialog style="padding:0" aria-label="Search" class="astro-v37mnknz"> <div class="dialog-frame sl-flex astro-v37mnknz">  <button data-close-modal class="sl-flex md:sl-hidden astro-v37mnknz"> Cancel </button> <div class="search-container astro-v37mnknz"> <div id="starlight__search" class="astro-v37mnknz"></div> </div> </div> </dialog> </site-search>  <script>
-	(() => {
-		const openBtn = document.querySelector('button[data-open-modal]');
-		const shortcut = openBtn?.querySelector('kbd');
-		if (!openBtn || !(shortcut instanceof HTMLElement)) return;
-		const platformKey = shortcut.querySelector('kbd');
-		if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
-			platformKey.textContent = '⌘';
-			openBtn.setAttribute('aria-keyshortcuts', 'Meta+K');
-		}
-		shortcut.style.display = '';
-	})();
-</script> <script type="module" src="/_astro/Search.astro_astro_type_script_index_0_lang.CJiOmi4V.js"></script>   </div> <div class="sl-hidden md:sl-flex print:hidden right-group astro-kmkmnagf"> <div class="sl-flex social-icons astro-kmkmnagf">  </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-4yphtoen"> <span class="sr-only astro-4yphtoen">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select autocomplete="off" class="astro-4yphtoen"> <option value="dark" class="astro-4yphtoen">Dark</option><option value="light" class="astro-4yphtoen">Light</option><option value="auto" selected class="astro-4yphtoen">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label>  </starlight-theme-select>  <script>
+</style><script type="module" src="/_astro/page.B1D-nYk3.js"></script></head> <body class="astro-bguv2lll"> <a href="#_top" class="astro-7q3lir66">Skip to content</a>  <div class="page sl-flex astro-vrdttmbt"> <header class="header astro-vrdttmbt"><div class="header astro-kmkmnagf"> <div class="title-wrapper sl-flex astro-kmkmnagf"> <a href="/" class="site-title sl-flex astro-m46x6ez3">  <span class="astro-m46x6ez3" translate="no"> NEOMORPHIC™ Docs </span> </a>  </div> <div class="sl-flex print:hidden astro-kmkmnagf">  </div> <div class="sl-hidden md:sl-flex print:hidden right-group astro-kmkmnagf"> <div class="sl-flex social-icons astro-kmkmnagf">  </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-4yphtoen"> <span class="sr-only astro-4yphtoen">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select autocomplete="off" class="astro-4yphtoen"> <option value="dark" class="astro-4yphtoen">Dark</option><option value="light" class="astro-4yphtoen">Light</option><option value="auto" selected class="astro-4yphtoen">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label>  </starlight-theme-select>  <script>
 	StarlightThemeProvider.updatePickers();
 </script> <script type="module">const r="starlight-theme",o=e=>e==="auto"||e==="dark"||e==="light"?e:"auto",c=()=>o(typeof localStorage<"u"&&localStorage.getItem(r));function n(e){typeof localStorage<"u"&&localStorage.setItem(r,e==="light"||e==="dark"?e:"")}const l=()=>matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";function t(e){StarlightThemeProvider.updatePickers(e),document.documentElement.dataset.theme=e==="auto"?l():e,n(e)}matchMedia("(prefers-color-scheme: light)").addEventListener("change",()=>{c()==="auto"&&t("auto")});class s extends HTMLElement{constructor(){super(),t(c()),this.querySelector("select")?.addEventListener("change",a=>{a.currentTarget instanceof HTMLSelectElement&&t(o(a.currentTarget.value))})}}customElements.define("starlight-theme-select",s);</script> <script type="module">class s extends HTMLElement{constructor(){super();const e=this.querySelector("select");e&&(e.addEventListener("change",t=>{t.currentTarget instanceof HTMLSelectElement&&(window.location.pathname=t.currentTarget.value)}),window.addEventListener("pageshow",t=>{if(!t.persisted)return;const n=e.querySelector("option[selected]")?.index;n!==e.selectedIndex&&(e.selectedIndex=n??0)}))}}customElements.define("starlight-lang-select",s);</script> </div> </div> </header> <nav class="sidebar print:hidden astro-vrdttmbt" aria-label="Main"> <starlight-menu-button class="print:hidden astro-jif73yzw"> <button aria-expanded="false" aria-label="Menu" aria-controls="starlight__sidebar" class="sl-flex md:sl-hidden astro-jif73yzw"> <svg aria-hidden="true" class="open-menu astro-jif73yzw astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"/></svg> <svg aria-hidden="true" class="close-menu astro-jif73yzw astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"/></svg> </button> </starlight-menu-button> <script type="module">class s extends HTMLElement{constructor(){super(),this.btn=this.querySelector("button"),this.btn.addEventListener("click",()=>this.toggleExpanded());const t=this.closest("nav");t&&t.addEventListener("keyup",e=>this.closeOnEscape(e))}setExpanded(t){this.setAttribute("aria-expanded",String(t)),document.body.toggleAttribute("data-mobile-menu-expanded",t)}toggleExpanded(){this.setExpanded(this.getAttribute("aria-expanded")!=="true")}closeOnEscape(t){t.code==="Escape"&&(this.setExpanded(!1),this.btn.focus())}}customElements.define("starlight-menu-button",s);</script>   <div id="starlight__sidebar" class="sidebar-pane astro-vrdttmbt"> <div class="sidebar-content sl-flex astro-vrdttmbt"> <sl-sidebar-state-persist data-hash="1idj8kr" class="astro-kku4brbg"> <script aria-hidden="true">
 		(() => {
@@ -317,146 +437,4 @@
 		})();
 	</script> </sl-sidebar-state-persist>  <div class="md:sl-hidden"> <div class="mobile-preferences sl-flex astro-wu23bvmt"> <div class="social-icons astro-wu23bvmt">  </div> <starlight-theme-select>  <label style="--sl-select-width: 6.25em" class="astro-4yphtoen"> <span class="sr-only astro-4yphtoen">Select theme</span> <svg aria-hidden="true" class="icon label-icon astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"/></svg> <select autocomplete="off" class="astro-4yphtoen"> <option value="dark" class="astro-4yphtoen">Dark</option><option value="light" class="astro-4yphtoen">Light</option><option value="auto" selected class="astro-4yphtoen">Auto</option> </select> <svg aria-hidden="true" class="icon caret astro-4yphtoen astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1em;"><path d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"/></svg> </label>  </starlight-theme-select>  <script>
 	StarlightThemeProvider.updatePickers();
-</script>   </div>  </div> </div> </div> </nav> <div class="main-frame astro-vrdttmbt">  <script type="module">const a=document.getElementById("starlight__sidebar"),n=a?.querySelector("sl-sidebar-state-persist"),o="sl-sidebar-state",i=()=>{let t=[];const e=n?.dataset.hash||"";try{const s=sessionStorage.getItem(o),r=JSON.parse(s||"{}");Array.isArray(r.open)&&r.hash===e&&(t=r.open)}catch{}return{hash:e,open:t,scroll:a?.scrollTop||0}},c=t=>{try{sessionStorage.setItem(o,JSON.stringify(t))}catch{}},d=()=>c(i()),l=(t,e)=>{const s=i();s.open[e]=t,c(s)};n?.addEventListener("click",t=>{if(!(t.target instanceof Element))return;const e=t.target.closest("summary")?.closest("details");if(!e)return;const s=e.querySelector("sl-sidebar-restore"),r=parseInt(s?.dataset.index||"");isNaN(r)||l(!e.open,r)});addEventListener("visibilitychange",()=>{document.visibilityState==="hidden"&&d()});addEventListener("pageHide",d);</script> <div class="lg:sl-flex astro-67yu43on"> <aside class="right-sidebar-container print:hidden astro-67yu43on"> <div class="right-sidebar astro-67yu43on"> <script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C181hMzK.js"></script><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.CKWWgpjV.js"></script><div class="lg:sl-hidden astro-pb3aqygn"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-doynk5tl"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-doynk5tl"><details id="starlight__mobile-toc" class="astro-doynk5tl"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-doynk5tl"><span class="toggle sl-flex astro-doynk5tl">On this page<svg aria-hidden="true" class="caret astro-doynk5tl astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-doynk5tl"></span></summary><div class="dropdown astro-doynk5tl"><ul class="isMobile astro-g2bywc46" style="--depth: 0;"> <li class="astro-g2bywc46" style="--depth: 0;"> <a href="#_top" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#analog-intelligence-infrastructure" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Analog Intelligence Infrastructure</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#virtual-frequency-space" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Virtual Frequency Space</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#phase-relationships" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Phase Relationships</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#central-intelligence-hub--application-layer" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Central Intelligence Hub &amp; Application Layer</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#harmonic-resonance" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Harmonic Resonance</span> </a>  </li> </ul> </div></details></nav></mobile-starlight-toc></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-pb3aqygn"><div class="sl-container astro-pb3aqygn"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-g2bywc46" style="--depth: 0;"> <li class="astro-g2bywc46" style="--depth: 0;"> <a href="#_top" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#analog-intelligence-infrastructure" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Analog Intelligence Infrastructure</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#virtual-frequency-space" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Virtual Frequency Space</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#phase-relationships" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Phase Relationships</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#central-intelligence-hub--application-layer" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Central Intelligence Hub &amp; Application Layer</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#harmonic-resonance" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Harmonic Resonance</span> </a>  </li> </ul> </nav></starlight-toc></div></div> </div> </aside> <div class="main-pane astro-67yu43on">  <main data-pagefind-body class="astro-bguv2lll" lang="en" dir="ltr">    <div class="content-panel astro-7nkwcw3z"> <div class="sl-container astro-7nkwcw3z"> <h1 id="_top" class="astro-j6tvhyss">Virtual Frequency Space</h1>  </div> </div>  <div class="content-panel astro-7nkwcw3z"> <div class="sl-container astro-7nkwcw3z"> <div class="sl-markdown-content"> <p>NEOMORPHIC™ represents information as distributed patterns in a virtual frequency space. This space is a mathematical structure held in digital memory. Ordinary digital processors carry out the operations within it.</p>
-<figure class="nm-figure nm-figure--ink" id="schematic"> <a class="nm-figure__frame" href="/graphics/G1.svg" target="_blank" rel="noopener noreferrer" aria-label="Open full-size image: Enterprise Analog Intelligence &#38; Virtual Frequency Architecture — analog intelligence infrastructure, virtual frequency space &#38; harmonic resonance."> <img src="/graphics/G1.svg" alt="Enterprise Analog Intelligence and Virtual Frequency Architecture schematic with eleven numbered blocks: (1) analog data sensors — Acoustic, RF, Thermal; (2) signal conditioning and processing; (3) edge analog computing cores; (4) spectrum allocation and (5) spatial and frequency mapping within a 0–100 GHz virtual frequency space; (6) phase coherence monitoring, (7) sync and timing engine and (8) distributed phase synchronization under Phase Relationships; the Central Intelligence Hub feeding the Application Layer; and (9) modal analysis, (10) resonant frequency tuning and (11) interference patterns under Harmonic Resonance." width="1024" height="1024" loading="lazy" decoding="async"> </a> <figcaption> <span class="nm-figure__caption">Enterprise Analog Intelligence &amp; Virtual Frequency Architecture — analog intelligence infrastructure, virtual frequency space &amp; harmonic resonance.</span>   </figcaption> </figure>
-<div class="sl-heading-wrapper level-h2"><h2 id="analog-intelligence-infrastructure">Analog Intelligence Infrastructure</h2><a class="sl-anchor-link" href="#analog-intelligence-infrastructure"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Analog Intelligence Infrastructure”</span></a></div>
-<blockquote>
-<p>Analog inputs, such as sound or vibration, are converted into digital representations through suitable interfaces. Information that is already digital can enter directly.</p>
-</blockquote>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>#</th><th>Block</th><th>Elements shown</th></tr></thead><tbody><tr><td><strong>1</strong></td><td><strong>Analog Data Sensors</strong></td><td>Acoustic · RF · Thermal</td></tr><tr><td><strong>2</strong></td><td><strong>Signal Conditioning &#x26; Processing</strong></td><td>Filtering · Amplification · Digitization</td></tr><tr><td><strong>3</strong></td><td><strong>Edge Analog Computing Cores</strong></td><td>Neuromorphic Processors · Physical Signal Analysis</td></tr></tbody></table>
-<div class="sl-heading-wrapper level-h2"><h2 id="virtual-frequency-space">Virtual Frequency Space</h2><a class="sl-anchor-link" href="#virtual-frequency-space"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Virtual Frequency Space”</span></a></div>
-<blockquote>
-<p>Frequency describes how often a wave repeats. Phase describes its position within a cycle. NEOMORPHIC™ represents these properties numerically. Each memory consists of many numerical components in frequency space.</p>
-</blockquote>
-<p>The schematic draws this space as a layered 3D spectrum (0–100 GHz) of signals, bands and dynamic spectrum.</p>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>#</th><th>Block</th><th>Elements shown</th></tr></thead><tbody><tr><td><strong>4</strong></td><td><strong>Spectrum Allocation</strong></td><td>Virtual Channels · Priority · Bandwidth</td></tr><tr><td><strong>5</strong></td><td><strong>Spatial &#x26; Frequency Mapping</strong></td><td>3D Grid · Signal Mapping</td></tr></tbody></table>
-<div class="sl-heading-wrapper level-h2"><h2 id="phase-relationships">Phase Relationships</h2><a class="sl-anchor-link" href="#phase-relationships"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Phase Relationships”</span></a></div>
-<blockquote>
-<p>Their phase relationships form the memory pattern. Patterns can also be combined to encode an item together with its associations and context.</p>
-</blockquote>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>#</th><th>Block</th><th>Elements shown</th></tr></thead><tbody><tr><td><strong>6</strong></td><td><strong>Phase Coherence Monitoring</strong></td><td>θ<sub>1</sub>, θ<sub>2</sub>, θ<sub>3</sub></td></tr><tr><td><strong>7</strong></td><td><strong>Sync &#x26; Timing Engine</strong></td><td>Zero Phase Sync</td></tr><tr><td><strong>8</strong></td><td><strong>Distributed Phase Synchronization</strong></td><td>Phase Shifts · Lag/Lead</td></tr></tbody></table>
-<div class="sl-heading-wrapper level-h2"><h2 id="central-intelligence-hub--application-layer">Central Intelligence Hub &#x26; Application Layer</h2><a class="sl-anchor-link" href="#central-intelligence-hub--application-layer"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Central Intelligence Hub &#x26; Application Layer”</span></a></div>
-<blockquote>
-<p>Resonance describes how compatible patterns align in this virtual space. That agreement is measured as coherence, helping the system identify the intended memory. Digital computation evaluates these relationships.</p>
-</blockquote>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>Block</th><th>Elements shown</th></tr></thead><tbody><tr><td><strong>Central Intelligence Hub</strong></td><td>Pattern Recognition · Predictive Analytics · Insight Generation</td></tr><tr><td><strong>Application Layer</strong></td><td>Smart Cities · Industrial IoT · Autonomous Systems</td></tr></tbody></table>
-<div class="sl-heading-wrapper level-h2"><h2 id="harmonic-resonance">Harmonic Resonance</h2><a class="sl-anchor-link" href="#harmonic-resonance"><span aria-hidden="true" class="sl-anchor-icon"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentcolor" d="m12.11 15.39-3.88 3.88a2.52 2.52 0 0 1-3.5 0 2.47 2.47 0 0 1 0-3.5l3.88-3.88a1 1 0 0 0-1.42-1.42l-3.88 3.89a4.48 4.48 0 0 0 6.33 6.33l3.89-3.88a1 1 0 1 0-1.42-1.42Zm8.58-12.08a4.49 4.49 0 0 0-6.33 0l-3.89 3.88a1 1 0 0 0 1.42 1.42l3.88-3.88a2.52 2.52 0 0 1 3.5 0 2.47 2.47 0 0 1 0 3.5l-3.88 3.88a1 1 0 1 0 1.42 1.42l3.88-3.89a4.49 4.49 0 0 0 0-6.33ZM8.83 15.17a1 1 0 0 0 1.1.22 1 1 0 0 0 .32-.22l4.92-4.92a1 1 0 0 0-1.42-1.42l-4.92 4.92a1 1 0 0 0 0 1.42Z"></path></svg></span><span class="sr-only">Section titled “Harmonic Resonance”</span></a></div>
-<blockquote>
-<p>Trinity Sky has built NEOMORPHIC™, an analog intelligence infrastructure layer that runs on digital hardware. It represents information in virtual space, drawing on frequency, phase, and harmonic resonance to organize how information is remembered, processed, and shared.</p>
-</blockquote>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<table><thead><tr><th>#</th><th>Block</th><th>Elements shown</th></tr></thead><tbody><tr><td><strong>9</strong></td><td><strong>Modal Analysis</strong></td><td>Frequencies f<sub>1</sub>, f<sub>2</sub>, f<sub>3</sub></td></tr><tr><td><strong>10</strong></td><td><strong>Resonant Frequency Tuning</strong></td><td>Optimize &#x26; Suppress</td></tr><tr><td><strong>11</strong></td><td><strong>Interference Patterns</strong></td><td>Constructive · Destructive</td></tr></tbody></table>
-<blockquote>
-<p>After processing, results can remain digital or return through analog outputs. The same virtual representation supports memory, processing, and exchange.</p>
-</blockquote> </div> <footer class="sl-flex astro-3yyafb3n"> <div class="meta sl-flex astro-3yyafb3n">   </div> <div class="pagination-links print:hidden astro-u2l5gyhi" dir="ltr"> <a href="/docs/concepts/shift-to-local-computing/" rel="prev" class="astro-u2l5gyhi"> <svg aria-hidden="true" class="astro-u2l5gyhi astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17 11H9.41l3.3-3.29a1.004 1.004 0 1 0-1.42-1.42l-5 5a1 1 0 0 0-.21.33 1 1 0 0 0 0 .76 1 1 0 0 0 .21.33l5 5a1.002 1.002 0 0 0 1.639-.325 1 1 0 0 0-.219-1.095L9.41 13H17a1 1 0 0 0 0-2Z"/></svg> <span class="astro-u2l5gyhi"> Previous <br class="astro-u2l5gyhi"> <span class="link-title astro-u2l5gyhi">The Shift to Local Computing</span> </span> </a> <a href="/docs/architecture/evolution-to-e8-geometric-compute/" rel="next" class="astro-u2l5gyhi"> <svg aria-hidden="true" class="astro-u2l5gyhi astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1.5rem;"><path d="M17.92 11.62a1.001 1.001 0 0 0-.21-.33l-5-5a1.003 1.003 0 1 0-1.42 1.42l3.3 3.29H7a1 1 0 0 0 0 2h7.59l-3.3 3.29a1.002 1.002 0 0 0 .325 1.639 1 1 0 0 0 1.095-.219l5-5a1 1 0 0 0 .21-.33 1 1 0 0 0 0-.76Z"/></svg> <span class="astro-u2l5gyhi"> Next <br class="astro-u2l5gyhi"> <span class="link-title astro-u2l5gyhi">Evolution to E8 Geometric Compute</span> </span> </a> </div>   </footer>  </div> </div>   </main> </div> </div>  </div> </div>  </body></html>
+</script>   </div>  </div> </div> </div> </nav> <div class="main-frame astro-vrdttmbt">  <script type="module">const a=document.getElementById("starlight__sidebar"),n=a?.querySelector("sl-sidebar-state-persist"),o="sl-sidebar-state",i=()=>{let t=[];const e=n?.dataset.hash||"";try{const s=sessionStorage.getItem(o),r=JSON.parse(s||"{}");Array.isArray(r.open)&&r.hash===e&&(t=r.open)}catch{}return{hash:e,open:t,scroll:a?.scrollTop||0}},c=t=>{try{sessionStorage.setItem(o,JSON.stringify(t))}catch{}},d=()=>c(i()),l=(t,e)=>{const s=i();s.open[e]=t,c(s)};n?.addEventListener("click",t=>{if(!(t.target instanceof Element))return;const e=t.target.closest("summary")?.closest("details");if(!e)return;const s=e.querySelector("sl-sidebar-restore"),r=parseInt(s?.dataset.index||"");isNaN(r)||l(!e.open,r)});addEventListener("visibilitychange",()=>{document.visibilityState==="hidden"&&d()});addEventListener("pageHide",d);</script> <div class="lg:sl-flex astro-67yu43on"> <aside class="right-sidebar-container print:hidden astro-67yu43on"> <div class="right-sidebar astro-67yu43on"> <script type="module" src="/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C181hMzK.js"></script><script type="module" src="/_astro/TableOfContents.astro_astro_type_script_index_0_lang.CKWWgpjV.js"></script><div class="lg:sl-hidden astro-pb3aqygn"><mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-doynk5tl"><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-doynk5tl"><details id="starlight__mobile-toc" class="astro-doynk5tl"><summary id="starlight__on-this-page--mobile" class="sl-flex astro-doynk5tl"><span class="toggle sl-flex astro-doynk5tl">On this page<svg aria-hidden="true" class="caret astro-doynk5tl astro-c6vsoqas" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="--sl-icon-size: 1rem;"><path d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"/></svg></span><span class="display-current astro-doynk5tl"></span></summary><div class="dropdown astro-doynk5tl"><ul class="isMobile astro-g2bywc46" style="--depth: 0;"> <li class="astro-g2bywc46" style="--depth: 0;"> <a href="#_top" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#analog-intelligence-infrastructure" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Analog Intelligence Infrastructure</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#virtual-frequency-space" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Virtual Frequency Space</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#phase-relationships" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Phase Relationships</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#central-intelligence-hub--application-layer" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Central Intelligence Hub &amp; Application Layer</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#harmonic-resonance" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Harmonic Resonance</span> </a>  </li> </ul> </div></details></nav></mobile-starlight-toc></div><div class="right-sidebar-panel sl-hidden lg:sl-block astro-pb3aqygn"><div class="sl-container astro-pb3aqygn"><starlight-toc data-min-h="2" data-max-h="3"><nav aria-labelledby="starlight__on-this-page"><h2 id="starlight__on-this-page">On this page</h2><ul class="astro-g2bywc46" style="--depth: 0;"> <li class="astro-g2bywc46" style="--depth: 0;"> <a href="#_top" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Overview</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#analog-intelligence-infrastructure" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Analog Intelligence Infrastructure</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#virtual-frequency-space" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Virtual Frequency Space</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#phase-relationships" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Phase Relationships</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#central-intelligence-hub--application-layer" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Central Intelligence Hub &amp; Application Layer</span> </a>  </li><li class="astro-g2bywc46" style="--depth: 0;"> <a href="#harmonic-resonance" class="astro-g2bywc46" style="--depth: 0;"> <span class="astro-g2bywc46" style="--depth: 0;">Harmonic Resonance</span> </a>  </li> </ul> </nav></starlight-toc></div></div> </div> </aside> <div class="main-pane astro-67yu43on">  <main data-pagefind-body class="astro-bguv2lll" lang="en" dir="ltr"><script id="neo-encrypted-main" type="application/json">{"iv":"KKgfANczXEYu680u","ct":"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"}</script></main> </div> </div>  </div> </div>  </body></html>
