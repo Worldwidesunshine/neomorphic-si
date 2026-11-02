@@ -7,7 +7,8 @@ RewriteEngine On
 RewriteCond %{REQUEST_METHOD} !^(GET|HEAD|OPTIONS)$ [NC]
 RewriteRule ^ - [R=405,L]
 
-# Block access to hidden files and directories (.git, .DS_Store, .htaccess, .nojekyll, etc.)
+# Block access to hidden files and directories (.git, .DS_Store, .htaccess, etc.) except /.well-known/
+RewriteCond %{REQUEST_URI} !^/\.well-known/ [NC]
 RewriteRule ^(?:.*/)?\. - [F,L]
 
 # Hide internal development styleguide and Cloudflare _headers file on Apache/LiteSpeed
